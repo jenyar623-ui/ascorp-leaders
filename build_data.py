@@ -83,6 +83,9 @@ HEADER_MAP = {
     'решенные рег.задачи': 'ts_r',
     'рег. заявки /задачи': '_reg_combined',
     'рег.заявки/задачи': '_reg_combined',
+    'решенные заявки и задачи': '_reg_combined',
+    'решенные заявки/задачи': '_reg_combined',
+    'решенные заявки/\nзадачи': '_reg_combined',
     'выезды': 'vz',
     'решенные зни': '_zni',
     'тзт': 'tzt',
@@ -170,14 +173,10 @@ def detect_block_columns(ws, header_row):
     result = []
     for i, f in enumerate(fields):
         if f == '_reg_combined':
-            # If next field is tzt (no more metrics after combined), map to ts_r
-            # Otherwise (зни or выезды follows), map to tk_r
-            remaining = fields[i + 1:]
-            non_tzt = [x for x in remaining if x != 'tzt']
-            if non_tzt:
-                result.append('tk_r')
-            else:
-                result.append('ts_r')
+            # Combined "рег. заявки/задачи" column → always map to tk_r.
+            # This is a sum of tk_r + ts_r that can't be split;
+            # ts_r should only come from a dedicated "решенные рег.задачи" column.
+            result.append('tk_r')
         elif f == '_zni':
             # зни → ts_r only when there's no separate ts_r column
             result.append('ts_r' if not has_separate_tsr else '_zni')
@@ -264,7 +263,8 @@ def parse_ops_sheet(wb, sheet_name, config):
                     elif field == 'vz':
                         v = safe_int(val)
                         rec['vz'] = v
-                        rec['ts_r'] = v  # выезды also counts as ts_r
+                        if 'ts_r' not in fields:
+                            rec['ts_r'] = v  # count as ts_r only when no dedicated ts_r column
                     elif field in ('tk_b', 'ts_b', 'tk_r', 'ts_r'):
                         rec[field] = safe_int(val)
                     # _zni (when separate ts_r exists) and unknowns are skipped
