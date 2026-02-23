@@ -27,9 +27,9 @@ except ImportError:
 
 # === PATHS ===
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_SOURCES = os.path.join(SCRIPT_DIR, "data-sources")
-OPS_EXCEL = os.path.join(DATA_SOURCES, "Операционные отчеты (ежедневные).xlsx")
-CLIENT_EXCEL = os.path.join(DATA_SOURCES, "Отчет по клиентам (ежемесячный).xlsx")
+ONEDRIVE_BASE = os.path.expanduser("~/Library/CloudStorage/OneDrive-AscorpSP/My Obsidian/FinancesDocs")
+OPS_EXCEL = os.path.join(ONEDRIVE_BASE, "Операционные отчеты (ежедневные).xlsx")
+CLIENT_EXCEL = os.path.join(ONEDRIVE_BASE, "Отчет по клиентам (ежемесячный).xlsx")
 JSON_OUTPUT = os.path.join(SCRIPT_DIR, "v3_data.json")
 HTML_OUTPUT = os.path.join(SCRIPT_DIR, "dashboard_v7.html")
 CSS_PATH = os.path.join(SCRIPT_DIR, "new_css.txt")
