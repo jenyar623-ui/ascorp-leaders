@@ -1,0 +1,160 @@
+</head>
+<body>
+    <div class="header">
+        <h1>Информационная панель</h1>
+        <div style="display:flex;align-items:center;gap:1.5rem">
+            <div class="filter-summary" id="filterSummary"></div>
+            <button class="filter-toggle" id="openSidebar">Фильтры</button>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab-button active" data-tab="ops">Операционный (ежедневный)</button>
+        <button class="tab-button" data-tab="client">Клиентский (ежемесячный)</button>
+    </div>
+
+    <!-- OPS TAB -->
+    <div id="ops" class="tab-content active">
+        <div class="kpi-row" id="opsKpiRow"></div>
+        <div class="chart-grid">
+            <div class="chart-container">
+                <div class="chart-title">Загрузка команд (% от нормы 8ч)</div>
+                <div class="chart-wrapper"><canvas id="opsLoadChart"></canvas></div>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">Производительность (бизнес заявки + задачи / час)</div>
+                <div class="chart-wrapper"><canvas id="opsProductivityChart"></canvas></div>
+            </div>
+        </div>
+        <div class="chart-container" style="margin-bottom:1.5rem">
+            <div class="chart-title">Динамика ТЗТ</div>
+            <div class="chart-wrapper"><canvas id="opsDynamicsChart"></canvas></div>
+        </div>
+        <div class="table-container">
+            <div class="chart-title">Данные по командам/сотрудникам</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Команда / Сотрудник</th>
+                        <th>Группа</th>
+                        <th>Месяц</th>
+                        <th>Трудозатраты (ч)</th>
+                        <th>Норма (ч)</th>
+                        <th>Загрузка %</th>
+                        <th>Бизнес заявки</th>
+                        <th>Бизнес задачи</th>
+                        <th>Выезды</th>
+                        <th>Заявок/ч (заявки)</th>
+                        <th>Заявок/ч (задачи)</th>
+                        <th>Заявок/ч (все)</th>
+                    </tr>
+                </thead>
+                <tbody id="opsTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- CLIENT TAB -->
+    <div id="client" class="tab-content">
+        <div class="kpi-row" id="clientKpiRow"></div>
+        <div class="chart-grid">
+            <div class="chart-container">
+                <div class="chart-title">ТЗТ по клиентам (топ-15)</div>
+                <div class="chart-wrapper"><canvas id="clientTztChart"></canvas></div>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">Операционка vs Проекты</div>
+                <div class="chart-wrapper"><canvas id="clientOpProjChart"></canvas></div>
+            </div>
+        </div>
+        <div class="table-container" style="margin-bottom:1.5rem">
+            <div class="chart-title">ТЗТ по командам</div>
+            <div style="overflow-x:auto">
+                <table id="teamTztTable"></table>
+            </div>
+        </div>
+        <div class="chart-grid">
+            <div class="chart-container">
+                <div class="chart-title">Заявки: поступило vs решено</div>
+                <div class="chart-wrapper"><canvas id="clientTicketsChart"></canvas></div>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">Доля заявок выполненных в срок (%)</div>
+                <div class="chart-wrapper"><canvas id="clientSlaChart"></canvas></div>
+            </div>
+        </div>
+        <div class="table-container">
+            <div class="chart-title">Данные по клиентам</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Клиент</th>
+                        <th>Месяц</th>
+                        <th>ТЗТ</th>
+                        <th>Операционка</th>
+                        <th>Проекты</th>
+                        <th>Поступило / Решено</th>
+                        <th>Выполнено в срок %</th>
+                        <th>Массовые инц.</th>
+                    </tr>
+                </thead>
+                <tbody id="clientTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- UNIFIED SIDEBAR -->
+    <div class="overlay" id="overlay"></div>
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-head">
+            <h2>Фильтры</h2>
+            <button class="close-btn" id="closeSidebar">&times;</button>
+        </div>
+
+        <!-- SECTION 1: PERIODS -->
+        <div class="sidebar-section">
+            <div class="section-header" data-section="periods">
+                <span class="section-title">Периоды</span>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-body" id="periodsBody">
+                <div class="section-actions">
+                    <button id="periodsAll">Все</button>
+                    <button id="periodsNone">Сбросить</button>
+                </div>
+                <div id="periodsTree"></div>
+            </div>
+        </div>
+
+        <!-- SECTION 2: TEAMS -->
+        <div class="sidebar-section">
+            <div class="section-header" data-section="teams">
+                <span class="section-title">Команды / Сотрудники</span>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-body" id="teamsBody">
+                <div class="section-actions">
+                    <button id="teamsAll">Все</button>
+                    <button id="teamsNone">Сбросить</button>
+                </div>
+                <div id="teamsTree"></div>
+            </div>
+        </div>
+
+        <!-- SECTION 3: CLIENTS -->
+        <div class="sidebar-section">
+            <div class="section-header" data-section="clients">
+                <span class="section-title">Клиенты</span>
+                <span class="section-toggle">▼</span>
+            </div>
+            <div class="section-body" id="clientsBody">
+                <div class="section-actions">
+                    <button id="clientsAll">Все</button>
+                    <button id="clientsNone">Сбросить</button>
+                </div>
+                <input type="text" class="client-search" id="clientSearch" placeholder="Поиск клиента...">
+                <div class="client-list" id="clientList"></div>
+            </div>
+        </div>
+    </div>
+</body>

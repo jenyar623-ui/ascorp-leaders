@@ -1,0 +1,1177 @@
+
+// Russian month names in order
+const MONTH_NAMES = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+const MONTH_NUM = {'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6, 'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12};
+
+// Russian public holidays (weekday dates only) for the data range
+const RU_HOLIDAYS = new Set([
+    '2025-11-04',
+    '2025-12-31',
+    '2026-01-01','2026-01-02','2026-01-05','2026-01-06','2026-01-07','2026-01-08','2026-01-09',
+    '2026-02-23',
+    '2026-03-09','2026-05-01','2026-05-04','2026-05-11','2026-06-12','2026-11-04'
+]);
+
+// For the current (incomplete) month: calculate ratio of working days elapsed / total working days
+function getAdjustedNormRatio(monthLabel) {
+    const parsed = parseMonthLabel(monthLabel);
+    const today = new Date();
+    const monthEnd = new Date(parsed.year, parsed.monthNum, 0); // last day of month
+    // If month is already complete, return null (use full norm from data)
+    if (today >= monthEnd) return null;
+    // Count working days from 1st to today
+    let workDaysElapsed = 0;
+    const start = new Date(parsed.year, parsed.monthNum - 1, 1);
+    for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+        const day = d.getDay(); // 0=Sun, 6=Sat
+        if (day !== 0 && day !== 6) {
+            const ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+            if (!RU_HOLIDAYS.has(ds)) workDaysElapsed++;
+        }
+    }
+    // Count total working days in the month
+    let totalWorkDays = 0;
+    for (let d = new Date(start); d <= monthEnd; d.setDate(d.getDate() + 1)) {
+        const day = d.getDay();
+        if (day !== 0 && day !== 6) {
+            const ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+            if (!RU_HOLIDAYS.has(ds)) totalWorkDays++;
+        }
+    }
+    return totalWorkDays > 0 ? workDaysElapsed / totalWorkDays : 1;
+}
+
+// Cache adjusted norm ratio per month label
+const _adjNormCache = {};
+function adjNorm(monthLabel, origNorm) {
+    if (!(monthLabel in _adjNormCache)) {
+        _adjNormCache[monthLabel] = getAdjustedNormRatio(monthLabel);
+    }
+    const ratio = _adjNormCache[monthLabel];
+    return ratio !== null ? origNorm * ratio : origNorm;
+}
+
+function parseMonthLabel(label) {
+    // "декабрь 2025" -> {monthName: "декабрь", monthNum: 12, year: 2025}
+    const parts = label.split(' ');
+    const monthName = parts[0];
+    const year = parseInt(parts[1]) || 9999;
+    return { monthName, monthNum: MONTH_NUM[monthName] || 0, year, label };
+}
+
+function monthLabelSort(a, b) {
+    const pa = parseMonthLabel(a);
+    const pb = parseMonthLabel(b);
+    if (pa.year !== pb.year) return pa.year - pb.year;
+    return pa.monthNum - pb.monthNum;
+}
+
+// Build team name mapping: hierarchy name -> cl_tzt name
+const teamNameMap = {};
+const clTeamsList = D.teams_cl || [];
+const clTeamLowerMap = {};
+clTeamsList.forEach(t => { clTeamLowerMap[t.toLowerCase()] = t; });
+
+Object.entries(D.hierarchy).forEach(([group, subs]) => {
+    Object.keys(subs).forEach(sg => {
+        const lower = sg.toLowerCase();
+        if (clTeamLowerMap[lower]) {
+            teamNameMap[sg] = clTeamLowerMap[lower];
+        } else {
+            // Special: "Гамма-1 Полевые" -> match last word "полевые"
+            const parts = sg.split(' ');
+            for (let i = parts.length - 1; i >= 0; i--) {
+                const pl = parts[i].toLowerCase();
+                if (clTeamLowerMap[pl]) { teamNameMap[sg] = clTeamLowerMap[pl]; break; }
+            }
+        }
+    });
+});
+
+function getClTeamNames() {
+    const result = new Set();
+    state.teams.forEach(t => {
+        if (teamNameMap[t]) result.add(teamNameMap[t]);
+        else if (clTeamLowerMap[t.toLowerCase()]) result.add(clTeamLowerMap[t.toLowerCase()]);
+    });
+    // If no teams selected through tree, return all cl teams
+    if (result.size === 0 && state.teams.size === 0) {
+        clTeamsList.forEach(t => result.add(t));
+    }
+    return result;
+}
+
+// Build unified period structure: collect all months from both ops and client data
+const allMonthLabels = new Set();
+const opsMonthSet = new Set(D.months_ops || []);
+const clMonthSet = new Set(D.months_cl || []);
+
+[...(D.months_ops || []), ...(D.months_cl || [])].forEach(m => allMonthLabels.add(m));
+const allMonthsSorted = Array.from(allMonthLabels).sort(monthLabelSort);
+
+// Build period structure: year -> months
+const periodData = {};
+allMonthsSorted.forEach(m => {
+    const p = parseMonthLabel(m);
+    if (!periodData[p.year]) periodData[p.year] = [];
+    periodData[p.year].push({ label: m, monthName: p.monthName, ops: opsMonthSet.has(m), cl: clMonthSet.has(m) });
+});
+const sortedYears = Object.keys(periodData).map(y => parseInt(y)).sort((a, b) => a - b);
+
+// STATE
+let state = {
+    tab: 'ops',
+    months: new Set(allMonthsSorted),
+    employees: new Set(),
+    teams: new Set(Object.values(D.hierarchy).flatMap(subs => Object.keys(subs))),
+    clients: new Set(D.clients || [])
+};
+let charts = {};
+
+// ===== BUILD PERIODS TREE =====
+function buildPeriods() {
+    const container = document.getElementById('periodsTree');
+    container.innerHTML = '';
+    sortedYears.forEach(year => {
+        const node = document.createElement('div');
+        node.className = 'year-node';
+        const label = document.createElement('div');
+        label.className = 'year-label';
+        const ycb = document.createElement('input');
+        ycb.type = 'checkbox';
+        ycb.checked = true;
+        const yt = document.createElement('span');
+        yt.textContent = year;
+        label.appendChild(ycb);
+        label.appendChild(yt);
+        const monthsDiv = document.createElement('div');
+        monthsDiv.className = 'year-months';
+        periodData[year].forEach(m => {
+            const mi = document.createElement('div');
+            mi.className = 'month-item';
+            mi.dataset.month = m.label;
+            mi.dataset.ops = m.ops;
+            mi.dataset.cl = m.cl;
+            const mcb = document.createElement('input');
+            mcb.type = 'checkbox';
+            mcb.checked = true;
+            mcb.dataset.month = m.label;
+            const mt = document.createElement('span');
+            mt.textContent = m.monthName;
+            mcb.addEventListener('change', () => {
+                if (mcb.checked) state.months.add(m.label); else state.months.delete(m.label);
+                syncYearCheckbox(ycb, monthsDiv);
+                onFilterChange();
+            });
+            mi.appendChild(mcb);
+            mi.appendChild(mt);
+            monthsDiv.appendChild(mi);
+        });
+        ycb.addEventListener('change', () => {
+            monthsDiv.querySelectorAll('input[type="checkbox"]:not(:disabled)').forEach(cb => { cb.checked = ycb.checked; if (ycb.checked) state.months.add(cb.dataset.month); else state.months.delete(cb.dataset.month); });
+            onFilterChange();
+        });
+        node.appendChild(label);
+        node.appendChild(monthsDiv);
+        container.appendChild(node);
+    });
+    updateMonthAvailability();
+}
+
+function syncYearCheckbox(ycb, container) {
+    const all = container.querySelectorAll('input[type="checkbox"]:not(:disabled)');
+    const checked = container.querySelectorAll('input[type="checkbox"]:checked:not(:disabled)');
+    ycb.checked = all.length > 0 && checked.length === all.length;
+    ycb.indeterminate = checked.length > 0 && checked.length < all.length;
+}
+
+function updateMonthAvailability() {
+    document.querySelectorAll('.month-item').forEach(mi => {
+        const isOps = mi.dataset.ops === 'true';
+        const isCl = mi.dataset.cl === 'true';
+        const available = state.tab === 'ops' ? isOps : isCl;
+        mi.classList.toggle('disabled', !available);
+        const cb = mi.querySelector('input');
+        if (!available) cb.disabled = true; else cb.disabled = false;
+    });
+    // Sync year checkboxes
+    document.querySelectorAll('.year-node').forEach(node => {
+        const ycb = node.querySelector('.year-label input');
+        const mDiv = node.querySelector('.year-months');
+        syncYearCheckbox(ycb, mDiv);
+    });
+}
+
+// ===== BUILD TEAMS TREE =====
+function buildTeams() {
+    const container = document.getElementById('teamsTree');
+    container.innerHTML = '';
+    Object.entries(D.hierarchy).forEach(([group, subs]) => {
+        const gn = document.createElement('div');
+        gn.className = 'tree-node';
+        const gl = document.createElement('div');
+        gl.className = 'tree-label';
+        const gt = document.createElement('button');
+        gt.className = 'tree-toggle';
+        gt.textContent = '\u25b6';
+        const gcb = document.createElement('input');
+        gcb.type = 'checkbox';
+        const gtx = document.createElement('span');
+        gtx.textContent = group;
+        gl.appendChild(gt);
+        gl.appendChild(gcb);
+        gl.appendChild(gtx);
+        const ch = document.createElement('div');
+        ch.className = 'tree-children';
+        gt.addEventListener('click', e => { e.stopPropagation(); ch.classList.toggle('expanded'); gt.textContent = ch.classList.contains('expanded') ? '\u25bc' : '\u25b6'; });
+        gcb.addEventListener('change', () => { ch.querySelectorAll('input[type="checkbox"]').forEach(c => c.checked = gcb.checked); updateSelections(); });
+
+        Object.entries(subs).forEach(([sg, emps]) => {
+            const sn = document.createElement('div');
+            sn.className = 'tree-node';
+            const sl = document.createElement('div');
+            sl.className = 'tree-label';
+            const st = document.createElement('button');
+            st.className = 'tree-toggle';
+            st.textContent = '\u25b6';
+            const scb = document.createElement('input');
+            scb.type = 'checkbox';
+            scb.dataset.team = sg;
+            const stx = document.createElement('span');
+            stx.textContent = sg;
+            sl.appendChild(st);
+            sl.appendChild(scb);
+            sl.appendChild(stx);
+            const ec = document.createElement('div');
+            ec.className = 'tree-children';
+            st.addEventListener('click', e => { e.stopPropagation(); ec.classList.toggle('expanded'); st.textContent = ec.classList.contains('expanded') ? '\u25bc' : '\u25b6'; });
+            scb.addEventListener('change', () => { ec.querySelectorAll('input').forEach(c => c.checked = scb.checked); updateSelections(); });
+            emps.forEach(emp => {
+                const el = document.createElement('div');
+                el.className = 'tree-label';
+                const ecb = document.createElement('input');
+                ecb.type = 'checkbox';
+                ecb.dataset.emp = emp;
+                ecb.addEventListener('change', updateSelections);
+                const et = document.createElement('span');
+                et.textContent = emp;
+                el.appendChild(document.createElement('span'));
+                el.appendChild(ecb);
+                el.appendChild(et);
+                ec.appendChild(el);
+            });
+            sn.appendChild(sl);
+            sn.appendChild(ec);
+            ch.appendChild(sn);
+        });
+        gn.appendChild(gl);
+        gn.appendChild(ch);
+        container.appendChild(gn);
+    });
+}
+
+function updateSelections() {
+    state.employees = new Set(Array.from(document.querySelectorAll('#teamsTree input[data-emp]:checked')).map(c => c.dataset.emp));
+    state.teams = new Set(Array.from(document.querySelectorAll('#teamsTree input[data-team]:checked')).map(c => c.dataset.team));
+    onFilterChange();
+}
+
+// ===== BUILD CLIENTS =====
+function buildClients() {
+    const container = document.getElementById('clientList');
+    container.innerHTML = '';
+    const sorted = [...(D.clients || [])].sort();
+    sorted.forEach(cl => {
+        const div = document.createElement('div');
+        div.className = 'client-item';
+        div.dataset.client = cl;
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.dataset.client = cl;
+        cb.addEventListener('change', () => {
+            if (cb.checked) state.clients.add(cl); else state.clients.delete(cl);
+            onFilterChange();
+        });
+        const sp = document.createElement('span');
+        sp.textContent = cl;
+        div.appendChild(cb);
+        div.appendChild(sp);
+        container.appendChild(div);
+    });
+    document.getElementById('clientSearch').addEventListener('input', e => {
+        const q = e.target.value.toLowerCase();
+        document.querySelectorAll('.client-item').forEach(ci => { ci.style.display = ci.dataset.client.toLowerCase().includes(q) ? '' : 'none'; });
+    });
+}
+
+// ===== FILTER CHANGE HANDLER =====
+function onFilterChange() {
+    updateFilterSummary();
+    renderActiveTab();
+}
+
+function updateFilterSummary() {
+    const mAll = allMonthsSorted.length, mSel = state.months.size;
+    const cAll = (D.clients||[]).length, cSel = state.clients.size;
+    const eSel = state.employees.size;
+    let parts = [];
+    parts.push('Периоды: <span>' + (mSel === mAll ? 'все' : mSel + '/' + mAll) + '</span>');
+    if (eSel > 0) parts.push('Сотрудники: <span>' + eSel + '</span>');
+    parts.push('Клиенты: <span>' + (cSel === cAll ? 'все' : cSel + '/' + cAll) + '</span>');
+    document.getElementById('filterSummary').innerHTML = parts.join(' &middot; ');
+}
+
+function renderActiveTab() { if (state.tab === 'ops') renderOpsTab(); else renderClientTab(); }
+
+// ===== OPS TAB =====
+function getOpsMonths() { return Array.from(D.months_ops || []).filter(m => state.months.has(m)).sort(monthLabelSort); }
+
+const MC = ['#6366f1','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#f97316','#14b8a6','#a855f7','#eab308'];
+
+function renderOpsTab() {
+    const months = getOpsMonths();
+    const emps = Array.from(state.employees);
+    const isEmp = emps.length > 0;
+    let data;
+    if (isEmp) data = D.emp_monthly.filter(d => months.includes(d.month) && emps.includes(d.employee));
+    else data = D.sg_monthly.filter(d => months.includes(d.month));
+
+    let tzt=0, normAdj=0, bizTotal=0, zadTotal=0, vzTotal=0, tphb=0, tphz=0, tpha=0, cnt=0;
+    data.forEach(d=>{
+        tzt += d.tzt||0;
+        normAdj += adjNorm(d.month, d.norm||0);
+        bizTotal += d.tk_b||0;
+        zadTotal += d.ts_b||0;
+        vzTotal += d.vz||0;
+        tphb += (d.tph_b||0);
+        tphz += (d.tph_z||0);
+        tpha += (d.tph_all||0);
+        cnt++;
+    });
+    const util = normAdj>0 ? ((tzt/normAdj)*100).toFixed(1) : 0;
+    const ub = util>=80 ? 'badge-green' : util>=50 ? 'badge-orange' : 'badge-red';
+    const avgTphb = cnt>0 ? (tphb/cnt).toFixed(2) : 0;
+    const avgTphz = cnt>0 ? (tphz/cnt).toFixed(2) : 0;
+    const avgTpha = cnt>0 ? (tpha/cnt).toFixed(2) : 0;
+
+    document.getElementById('opsKpiRow').innerHTML =
+        '<div class="kpi-card"><div class="kpi-label">Трудозатраты</div><div class="kpi-value">'+tzt.toFixed(1)+'</div><div class="kpi-subtext">часов</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Загрузка</div><div class="kpi-value">'+util+'%</div><div class="kpi-subtext"><span class="badge '+ub+'">'+(util>=80?'Высокая':util>=50?'Средняя':'Низкая')+'</span></div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Бизнес заявки</div><div class="kpi-value">'+bizTotal+'</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Бизнес задачи</div><div class="kpi-value">'+zadTotal+'</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Выезды</div><div class="kpi-value">'+vzTotal+'</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Заявки в час (заявки / задачи / все)</div><div class="kpi-value">'+avgTphb+' / '+avgTphz+' / '+avgTpha+'</div></div>';
+
+    renderOpsLoad(data, isEmp, months);
+    renderOpsProd(data, isEmp, months);
+    renderOpsDyn(data, isEmp, months);
+    renderOpsTable(data, isEmp, months);
+}
+
+function renderOpsLoad(data, isEmp, months) {
+    const multi = months.length > 1;
+    if (multi) {
+        const keys = new Set(), byM = {};
+        data.forEach(d => {
+            const k = isEmp ? d.employee : d.subgroup;
+            keys.add(k);
+            if (!byM[d.month]) byM[d.month] = {};
+            if (!byM[d.month][k]) byM[d.month][k] = {t: 0, n: 0};
+            byM[d.month][k].t += d.tzt||0;
+            byM[d.month][k].n += adjNorm(d.month, d.norm||0);
+        });
+        const avg = {};
+        keys.forEach(k => {
+            let t=0, n=0;
+            months.forEach(m => {
+                if (byM[m] && byM[m][k]) {
+                    t += byM[m][k].t;
+                    n += byM[m][k].n;
+                }
+            });
+            avg[k] = n>0 ? t/n : 0;
+        });
+        const labels = [...keys].sort((a,b) => avg[b] - avg[a]);
+        const ds = months.map((m, i) => ({
+            label: m,
+            data: labels.map(k => {
+                const v = byM[m] && byM[m][k];
+                return v && v.n>0 ? ((v.t/v.n)*100).toFixed(1) : 0;
+            }),
+            backgroundColor: MC[i%MC.length],
+            borderWidth: 0
+        }));
+        if (charts.oL) charts.oL.destroy();
+        charts.oL = new Chart(document.getElementById('opsLoadChart').getContext('2d'), {
+            type: 'bar',
+            data: {labels, datasets: ds},
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {labels: {color: '#8b8fa3'}},
+                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                },
+                scales: {
+                    x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, max: 120},
+                    y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+                }
+            }
+        });
+    } else {
+        const g = {};
+        data.forEach(d => {
+            const k = isEmp ? d.employee : d.subgroup;
+            if (!g[k]) g[k] = {t: 0, n: 0, month: null};
+            g[k].t += d.tzt||0;
+            g[k].n += adjNorm(d.month, d.norm||0);
+            g[k].month = d.month;
+        });
+        const s = Object.entries(g).sort((a,b) => (b[1].n>0 ? b[1].t/b[1].n : 0) - (a[1].n>0 ? a[1].t/a[1].n : 0));
+        const labels = s.map(x => x[0]);
+        const vals = s.map(x => x[1].n>0 ? ((x[1].t/x[1].n)*100).toFixed(1) : 0);
+        if (charts.oL) charts.oL.destroy();
+        charts.oL = new Chart(document.getElementById('opsLoadChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Загрузка %',
+                    data: vals,
+                    backgroundColor: vals.map(v => v>=80 ? '#22c55e' : v>=50 ? '#f59e0b' : '#ef4444'),
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {display: false},
+                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                },
+                scales: {
+                    x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, max: 120},
+                    y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+                }
+            }
+        });
+    }
+}
+
+function renderOpsProd(data, isEmp, months) {
+    const multi = months.length > 1;
+    if (multi) {
+        const keys = new Set(), byM = {};
+        data.forEach(d => {
+            const k = isEmp ? d.employee : d.subgroup;
+            keys.add(k);
+            if (!byM[d.month]) byM[d.month] = {};
+            if (!byM[d.month][k]) byM[d.month][k] = {t: 0, tk: 0};
+            byM[d.month][k].t += d.tzt||0;
+            byM[d.month][k].tk += (d.tk_b||0) + (d.ts_b||0);
+        });
+        const avg = {};
+        keys.forEach(k => {
+            let t=0, tk=0;
+            months.forEach(m => {
+                if (byM[m] && byM[m][k]) {
+                    t += byM[m][k].t;
+                    tk += byM[m][k].tk;
+                }
+            });
+            avg[k] = t>0 ? tk/t : 0;
+        });
+        const labels = [...keys].sort((a,b) => avg[b] - avg[a]);
+        const ds = months.map((m, i) => ({
+            label: m,
+            data: labels.map(k => {
+                const v = byM[m] && byM[m][k];
+                return v && v.t>0 ? (v.tk/v.t).toFixed(2) : 0;
+            }),
+            backgroundColor: MC[i%MC.length],
+            borderWidth: 0
+        }));
+        if (charts.oP) charts.oP.destroy();
+        charts.oP = new Chart(document.getElementById('opsProductivityChart').getContext('2d'), {
+            type: 'bar',
+            data: {labels, datasets: ds},
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {labels: {color: '#8b8fa3'}},
+                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                },
+                scales: {
+                    x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                    y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+                }
+            }
+        });
+    } else {
+        const g = {};
+        data.forEach(d => {
+            const k = isEmp ? d.employee : d.subgroup;
+            if (!g[k]) g[k] = {t: 0, tk: 0};
+            g[k].t += d.tzt||0;
+            g[k].tk += (d.tk_b||0) + (d.ts_b||0);
+        });
+        const s = Object.entries(g).sort((a,b) => (b[1].t>0 ? b[1].tk/b[1].t : 0) - (a[1].t>0 ? a[1].tk/a[1].t : 0));
+        const labels = s.map(x => x[0]);
+        const vals = s.map(x => x[1].t>0 ? (x[1].tk/x[1].t).toFixed(2) : 0);
+        if (charts.oP) charts.oP.destroy();
+        charts.oP = new Chart(document.getElementById('opsProductivityChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Заявки / час',
+                    data: vals,
+                    backgroundColor: '#6366f1',
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {display: false},
+                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                },
+                scales: {
+                    x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                    y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+                }
+            }
+        });
+    }
+}
+
+function renderOpsDyn(data, isEmp, months) {
+    if (months.length < 2) {
+        // Single month: horizontal bar sorted by TZT
+        const g = {};
+        data.forEach(d => {
+            const k = isEmp ? d.employee : d.subgroup;
+            g[k] = (g[k]||0) + (d.tzt||0);
+        });
+        const s = Object.entries(g).sort((a,b) => b[1] - a[1]);
+        if (charts.oD) charts.oD.destroy();
+        charts.oD = new Chart(document.getElementById('opsDynamicsChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: s.map(x => x[0]),
+                datasets: [{label: 'ТЗТ (ч)', data: s.map(x => x[1].toFixed(1)), backgroundColor: '#6366f1', borderWidth: 0}]
+            },
+            options: {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                plugins: {legend: {display: false}, tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}},
+                scales: {
+                    x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                    y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+                }
+            }
+        });
+        return;
+    }
+    // Multiple months: stacked bar chart
+    const groups = {};
+    data.forEach(d => {
+        const k = isEmp ? d.employee : d.subgroup;
+        if (!groups[k]) groups[k] = {};
+        if (!groups[k][d.month]) groups[k][d.month] = 0;
+        groups[k][d.month] += d.tzt||0;
+    });
+    // Sort by total TZT descending
+    const sorted = Object.entries(groups).sort((a,b) => {
+        const ta = Object.values(a[1]).reduce((s,v) => s+v, 0);
+        const tb = Object.values(b[1]).reduce((s,v) => s+v, 0);
+        return tb - ta;
+    });
+    const ds = sorted.map(([n, md], i) => ({
+        label: n,
+        data: months.map(m => (md[m]||0).toFixed(1)),
+        backgroundColor: MC[i%MC.length],
+        borderWidth: 0
+    }));
+    if (charts.oD) charts.oD.destroy();
+    charts.oD = new Chart(document.getElementById('opsDynamicsChart').getContext('2d'), {
+        type: 'bar',
+        data: {labels: months, datasets: ds},
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {labels: {color: '#8b8fa3', font: {size: 11}}},
+                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+            },
+            scales: {
+                x: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                y: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}}
+            }
+        }
+    });
+}
+
+function renderOpsTable(data, isEmp, months) {
+    const tbody = document.getElementById('opsTableBody');
+    tbody.innerHTML = '';
+
+    // Build a pivot-like structure: team/employee -> month -> metrics
+    const pivot = {};
+    data.forEach(d => {
+        const key = isEmp ? d.employee : d.subgroup;
+        const group = isEmp ? d.subgroup : d.group;
+        if (!pivot[key]) pivot[key] = {group, months: {}};
+        pivot[key].months[d.month] = d;
+    });
+
+    // Sort keys by total TZT descending
+    const keys = Object.keys(pivot).sort((a, b) => {
+        const tzta = Object.values(pivot[a].months).reduce((s, m) => s + (m.tzt||0), 0);
+        const tztb = Object.values(pivot[b].months).reduce((s, m) => s + (m.tzt||0), 0);
+        return tztb - tzta;
+    });
+
+    keys.forEach(key => {
+        const entry = pivot[key];
+        let totalTzt = 0, totalNormAdj = 0, totalBiz = 0, totalZad = 0, totalVz = 0;
+
+        // Calculate totals
+        Object.entries(entry.months).forEach(([mo, m]) => {
+            if (m) {
+                totalTzt += m.tzt||0;
+                totalNormAdj += adjNorm(mo, m.norm||0);
+                totalBiz += m.tk_b||0;
+                totalZad += m.ts_b||0;
+                totalVz += m.vz||0;
+            }
+        });
+
+        // Render one row per month
+        months.forEach(month => {
+            const m = entry.months[month];
+            if (!m) return;
+
+            const nAdj = adjNorm(month, m.norm||0);
+            const util = nAdj>0 ? ((m.tzt/nAdj)*100).toFixed(1) : 0;
+            const ub = util>=80 ? 'badge-green' : util>=50 ? 'badge-orange' : 'badge-red';
+            const biz = m.tk_b||0;
+            const zad = m.ts_b||0;
+            const tr = document.createElement('tr');
+            tr.className = 'ops-data-row';
+            tr.innerHTML =
+                '<td>'+key+'</td>'+
+                '<td>'+entry.group+'</td>'+
+                '<td>'+month+'</td>'+
+                '<td>'+(m.tzt||0).toFixed(1)+'</td>'+
+                '<td>'+nAdj.toFixed(0)+'</td>'+
+                '<td><span class="badge '+ub+'">'+util+'%</span></td>'+
+                '<td>'+biz+'</td>'+
+                '<td>'+zad+'</td>'+
+                '<td>'+(m.vz||0)+'</td>'+
+                '<td>'+(m.tph_b||0).toFixed(2)+'</td>'+
+                '<td>'+(m.tph_z||0).toFixed(2)+'</td>'+
+                '<td>'+(m.tph_all||0).toFixed(2)+'</td>';
+            tbody.appendChild(tr);
+        });
+
+        // Add subtotal row if multiple months
+        if (months.length > 1) {
+            const totalUtil = totalNormAdj>0 ? ((totalTzt/totalNormAdj)*100).toFixed(1) : 0;
+            const totalUb = totalUtil>=80 ? 'badge-green' : totalUtil>=50 ? 'badge-orange' : 'badge-red';
+            const sub = document.createElement('tr');
+            sub.className = 'ops-subtotal-row';
+            sub.innerHTML =
+                '<td>'+key+' (итого)</td>'+
+                '<td></td>'+
+                '<td>Всего</td>'+
+                '<td>'+totalTzt.toFixed(1)+'</td>'+
+                '<td>'+totalNormAdj.toFixed(0)+'</td>'+
+                '<td><span class="badge '+totalUb+'">'+totalUtil+'%</span></td>'+
+                '<td>'+totalBiz+'</td>'+
+                '<td>'+totalZad+'</td>'+
+                '<td>'+totalVz+'</td>'+
+                '<td></td><td></td><td></td>';
+            tbody.appendChild(sub);
+        }
+    });
+}
+
+// ===== CLIENT TAB =====
+function getClMonths() { return Array.from(D.months_cl || []).filter(m => state.months.has(m)).sort(monthLabelSort); }
+
+function renderClientTab() {
+    const months = getClMonths();
+    const teams = Array.from(getClTeamNames());
+    const clients = state.clients;
+
+    let tztD = D.cl_tzt.filter(d => months.includes(d.ml) && teams.includes(d.team) && clients.has(d.client));
+    let tkD = D.cl_tickets.filter(d => months.includes(d.ml) && clients.has(d.client) && d.type === 'заявки');
+    let slaD = D.cl_sla.filter(d => months.includes(d.ml) && clients.has(d.client));
+    let massD = D.cl_mass.filter(d => months.includes(d.ml) && clients.has(d.client));
+
+    let tT=0, tO=0, tP=0, tI=0, tR=0, slaSum=0, slaCnt=0, mi=0;
+    tztD.forEach(d => {
+        tT += d.tzt||0;
+        if (d.tzt_type === 'операционка') tO += d.tzt||0;
+        if (d.tzt_type === 'проект') tP += d.tzt||0;
+    });
+    tkD.forEach(d => {
+        tI += d.incoming||0;
+        tR += d.resolved||0;
+    });
+    slaD.forEach(d => {
+        let vals = 0, cnt = 0;
+        if (d.sr != null) { vals += d.sr; cnt++; }
+        if (d.si != null) { vals += d.si; cnt++; }
+        if (cnt > 0) { slaSum += vals / cnt; slaCnt++; }
+    });
+    massD.forEach(d => { mi += d.mi||0; });
+
+    const avgSla = slaCnt>0 ? (slaSum/slaCnt).toFixed(1) : '—';
+    const pP = tT>0 ? ((tP/tT)*100).toFixed(1) : 0;
+
+    document.getElementById('clientKpiRow').innerHTML =
+        '<div class="kpi-card"><div class="kpi-label">ТЗТ всего</div><div class="kpi-value">'+tT.toFixed(1)+'</div><div class="kpi-subtext">опер: '+tO.toFixed(1)+' / проект: '+tP.toFixed(1)+'</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Доля проектов</div><div class="kpi-value">'+pP+'%</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Заявки</div><div class="kpi-value">'+tI+' / '+tR+'</div><div class="kpi-subtext">поступило / решено</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Выполнено в срок</div><div class="kpi-value">'+avgSla+'%</div></div>'+
+        '<div class="kpi-card"><div class="kpi-label">Массовые инциденты</div><div class="kpi-value">'+mi+'</div></div>';
+
+    renderClTzt(tztD);
+    renderClOp(tztD);
+    renderClTeamTzt(tztD);
+    renderClTk(tkD);
+    renderClSla(slaD);
+    renderClTable(tztD, tkD, slaD, massD);
+}
+
+function renderClTzt(data) {
+    const a = {};
+    data.forEach(d => {
+        if (!a[d.client]) a[d.client] = 0;
+        a[d.client] += d.tzt||0;
+    });
+    const s = Object.entries(a).sort((a,b) => b[1] - a[1]).slice(0, 15);
+    const labels = s.map(x => x[0]);
+    const vals = s.map(x => x[1]);
+    if (charts.cT) charts.cT.destroy();
+    charts.cT = new Chart(document.getElementById('clientTztChart').getContext('2d'), {
+        type: 'bar',
+        data: {labels, datasets: [{label: 'ТЗТ', data: vals, backgroundColor: '#6366f1', borderWidth: 0}]},
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {display: false},
+                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+            },
+            scales: {
+                x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+            },
+            onClick: (e, el) => {
+                if (el.length) {
+                    const cl = labels[el[0].index];
+                    if (state.clients.size === 1 && state.clients.has(cl)) {
+                        state.clients = new Set(D.clients||[]);
+                    } else {
+                        state.clients = new Set([cl]);
+                    }
+                    syncClientCbs();
+                    updateFilterSummary();
+                    renderClientTab();
+                }
+            }
+        }
+    });
+}
+
+function syncClientCbs() {
+    document.querySelectorAll('#clientList input').forEach(cb => {
+        cb.checked = state.clients.has(cb.dataset.client);
+    });
+}
+
+function renderClOp(data) {
+    const a = {};
+    data.forEach(d => {
+        if (!a[d.client]) a[d.client] = {o: 0, p: 0};
+        if (d.tzt_type === 'операционка') a[d.client].o += d.tzt||0;
+        if (d.tzt_type === 'проект') a[d.client].p += d.tzt||0;
+    });
+    const s = Object.entries(a).sort((a,b) => (b[1].o + b[1].p) - (a[1].o + a[1].p)).slice(0, 15);
+    if (charts.cO) charts.cO.destroy();
+    charts.cO = new Chart(document.getElementById('clientOpProjChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: s.map(x => x[0]),
+            datasets: [
+                {label: 'Операционка', data: s.map(x => x[1].o), backgroundColor: '#6366f1', borderWidth: 0},
+                {label: 'Проекты', data: s.map(x => x[1].p), backgroundColor: '#8b5cf6', borderWidth: 0}
+            ]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {labels: {color: '#8b8fa3'}},
+                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+            },
+            scales: {
+                x: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                y: {stacked: true, grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
+            }
+        }
+    });
+}
+
+function renderClTeamTzt(data) {
+    const months = getClMonths();
+    const tbl = document.getElementById('teamTztTable');
+
+    // Aggregate: team -> month -> {ops, proj, total}
+    const agg = {};
+    data.forEach(d => {
+        const t = d.team;
+        if (!agg[t]) agg[t] = {};
+        if (!agg[t][d.ml]) agg[t][d.ml] = {ops: 0, proj: 0, total: 0};
+        agg[t][d.ml].total += d.tzt||0;
+        if (d.tzt_type === 'операционка') agg[t][d.ml].ops += d.tzt||0;
+        if (d.tzt_type === 'проект') agg[t][d.ml].proj += d.tzt||0;
+    });
+
+    // Sort teams by total TZT desc
+    const teams = Object.entries(agg)
+        .map(([t, md]) => [t, Object.values(md).reduce((s,v) => s + v.total, 0)])
+        .sort((a,b) => b[1] - a[1])
+        .map(x => x[0]);
+
+    // Build pivot table: header = Team | Month1 | Month2 | ... | Итого
+    let h = '<thead><tr><th>Команда</th>';
+    months.forEach(m => { h += '<th>'+m+'</th>'; });
+    if (months.length > 1) h += '<th>Итого</th>';
+    h += '</tr></thead>';
+
+    let b = '<tbody>';
+    let grandRow = {months: {}, total: 0};
+    months.forEach(m => { grandRow.months[m] = 0; });
+
+    teams.forEach(team => {
+        const md = agg[team];
+        let rowTotal = 0;
+        b += '<tr class="ops-data-row"><td>'+team+'</td>';
+        months.forEach(m => {
+            const v = md[m] ? md[m].total : 0;
+            rowTotal += v;
+            grandRow.months[m] = (grandRow.months[m]||0) + v;
+            if (v === 0) {
+                b += '<td style="color:#555">—</td>';
+            } else {
+                const ops = md[m] ? md[m].ops : 0;
+                const proj = md[m] ? md[m].proj : 0;
+                const tip = 'опер: '+ops.toFixed(1)+' / проект: '+proj.toFixed(1);
+                b += '<td title="'+tip+'">'+v.toFixed(1)+'</td>';
+            }
+        });
+        grandRow.total += rowTotal;
+        if (months.length > 1) b += '<td><strong>'+rowTotal.toFixed(1)+'</strong></td>';
+        b += '</tr>';
+    });
+
+    // Grand total row
+    if (teams.length > 1) {
+        b += '<tr class="ops-subtotal-row"><td>Всего</td>';
+        months.forEach(m => { b += '<td>'+grandRow.months[m].toFixed(1)+'</td>'; });
+        if (months.length > 1) b += '<td><strong>'+grandRow.total.toFixed(1)+'</strong></td>';
+        b += '</tr>';
+    }
+    b += '</tbody>';
+    tbl.innerHTML = h + b;
+}
+
+function renderClTk(data) {
+    const a = {};
+    data.forEach(d => {
+        if (!a[d.ml]) a[d.ml] = {i: 0, r: 0};
+        a[d.ml].i += d.incoming||0;
+        a[d.ml].r += d.resolved||0;
+    });
+    const months = Array.from(D.months_cl || []).filter(m => a[m]).sort(monthLabelSort);
+    if (charts.cK) charts.cK.destroy();
+    charts.cK = new Chart(document.getElementById('clientTicketsChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: months,
+            datasets: [
+                {label: 'Поступило', data: months.map(m => a[m].i), backgroundColor: '#f59e0b', borderWidth: 0},
+                {label: 'Решено', data: months.map(m => a[m].r), backgroundColor: '#22c55e', borderWidth: 0}
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {labels: {color: '#8b8fa3'}},
+                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+            },
+            scales: {
+                x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                y: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}}
+            }
+        }
+    });
+}
+
+function renderClSla(data) {
+    const a = {};
+    data.forEach(d => {
+        if (!a[d.ml]) a[d.ml] = {sum: 0, cnt: 0};
+        let vals = 0, cnt = 0;
+        if (d.sr != null) { vals += d.sr; cnt++; }
+        if (d.si != null) { vals += d.si; cnt++; }
+        if (cnt > 0) { a[d.ml].sum += vals / cnt; a[d.ml].cnt++; }
+    });
+    const months = Array.from(D.months_cl || []).filter(m => a[m]).sort(monthLabelSort);
+    if (charts.cS) charts.cS.destroy();
+    charts.cS = new Chart(document.getElementById('clientSlaChart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: months,
+            datasets: [{
+                label: 'Выполнено в срок %',
+                data: months.map(m => a[m].cnt>0 ? (a[m].sum/a[m].cnt).toFixed(1) : null),
+                borderColor: '#6366f1',
+                backgroundColor: '#6366f120',
+                tension: 0.4,
+                fill: true,
+                pointRadius: 5,
+                pointBackgroundColor: '#6366f1'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {display: false},
+                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+            },
+            scales: {
+                x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
+                y: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, min: 0, max: 100}
+            }
+        }
+    });
+}
+
+function renderClTable(tztD, tkD, slaD, massD) {
+    // Build per-client per-month data
+    const c = {};
+    tztD.forEach(d => {
+        const k = d.client + '|' + d.ml;
+        if (!c[k]) c[k] = {client: d.client, month: d.ml, tzt: 0, ops: 0, proj: 0, tk_in: 0, tk_res: 0, sla: null, mi: 0};
+        c[k].tzt += d.tzt||0;
+        if (d.tzt_type === 'операционка') c[k].ops += d.tzt||0;
+        if (d.tzt_type === 'проект') c[k].proj += d.tzt||0;
+    });
+    tkD.forEach(d => {
+        const k = d.client + '|' + d.ml;
+        if (!c[k]) c[k] = {client: d.client, month: d.ml, tzt: 0, ops: 0, proj: 0, tk_in: 0, tk_res: 0, sla: null, mi: 0};
+        c[k].tk_in += d.incoming||0;
+        c[k].tk_res += d.resolved||0;
+    });
+    slaD.forEach(d => {
+        const k = d.client + '|' + d.ml;
+        if (!c[k]) c[k] = {client: d.client, month: d.ml, tzt: 0, ops: 0, proj: 0, tk_in: 0, tk_res: 0, sla: null, mi: 0};
+        let vals = 0, cnt = 0;
+        if (d.sr != null) { vals += d.sr; cnt++; }
+        if (d.si != null) { vals += d.si; cnt++; }
+        if (cnt > 0) c[k].sla = vals / cnt;
+    });
+    massD.forEach(d => {
+        const k = d.client + '|' + d.ml;
+        if (!c[k]) c[k] = {client: d.client, month: d.ml, tzt: 0, ops: 0, proj: 0, tk_in: 0, tk_res: 0, sla: null, mi: 0};
+        c[k].mi += d.mi||0;
+    });
+
+    // Group by client -> months
+    const pivot = {};
+    Object.values(c).forEach(r => {
+        if (!pivot[r.client]) pivot[r.client] = {};
+        pivot[r.client][r.month] = r;
+    });
+
+    // Sort clients by total TZT descending
+    const months = getClMonths();
+    const clients = Object.keys(pivot).sort((a, b) => {
+        const ta = Object.values(pivot[a]).reduce((s, m) => s + m.tzt, 0);
+        const tb = Object.values(pivot[b]).reduce((s, m) => s + m.tzt, 0);
+        return tb - ta;
+    });
+
+    const tbody = document.getElementById('clientTableBody');
+    tbody.innerHTML = '';
+
+    const colCount = 8; // number of columns in client table
+    clients.forEach(client => {
+        const mData = pivot[client];
+        let totTzt=0, totOps=0, totProj=0, totIn=0, totRes=0, totSla=0, cntSla=0, totMi=0;
+        let hasAnyData = false;
+        const rows = [];
+
+        // Collect month rows, track totals
+        months.forEach(month => {
+            const r = mData[month];
+            if (!r) return;
+            totTzt += r.tzt; totOps += r.ops; totProj += r.proj;
+            totIn += r.tk_in; totRes += r.tk_res;
+            if (r.sla != null) { totSla += r.sla; cntSla++; }
+            totMi += r.mi;
+
+            const isEmpty = r.tzt === 0 && r.tk_in === 0 && r.tk_res === 0 && r.sla == null && r.mi === 0;
+            if (!isEmpty) hasAnyData = true;
+            rows.push({r, month, isEmpty});
+        });
+
+        if (!hasAnyData) {
+            // All months are zero → single collapsed row
+            const tr = document.createElement('tr');
+            tr.className = 'ops-data-row';
+            tr.style.opacity = '0.5';
+            tr.innerHTML =
+                '<td>'+client+'</td>'+
+                '<td colspan="'+(colCount-1)+'" style="text-align:center;color:#8b8fa3;font-style:italic">Нет данных по обращениям</td>';
+            tbody.appendChild(tr);
+            return;
+        }
+
+        // Render rows, skip empty months
+        rows.forEach(({r, month, isEmpty}) => {
+            if (isEmpty) return; // skip zero months
+            const tr = document.createElement('tr');
+            tr.className = 'ops-data-row';
+            tr.innerHTML =
+                '<td>'+r.client+'</td>'+
+                '<td>'+r.month+'</td>'+
+                '<td>'+r.tzt.toFixed(1)+'</td>'+
+                '<td>'+r.ops.toFixed(1)+'</td>'+
+                '<td>'+r.proj.toFixed(1)+'</td>'+
+                '<td>'+r.tk_in+' / '+r.tk_res+'</td>'+
+                '<td>'+(r.sla!=null ? r.sla.toFixed(1) : '—')+'</td>'+
+                '<td>'+r.mi+'</td>';
+            tbody.appendChild(tr);
+        });
+
+        // Subtotal row if multiple non-empty months
+        const nonEmpty = rows.filter(x => !x.isEmpty);
+        if (nonEmpty.length > 1) {
+            const avgSla = cntSla>0 ? (totSla/cntSla).toFixed(1) : '—';
+            const sub = document.createElement('tr');
+            sub.className = 'ops-subtotal-row';
+            sub.innerHTML =
+                '<td>'+client+' (итого)</td>'+
+                '<td>Всего</td>'+
+                '<td>'+totTzt.toFixed(1)+'</td>'+
+                '<td>'+totOps.toFixed(1)+'</td>'+
+                '<td>'+totProj.toFixed(1)+'</td>'+
+                '<td>'+totIn+' / '+totRes+'</td>'+
+                '<td>'+avgSla+'</td>'+
+                '<td>'+totMi+'</td>';
+            tbody.appendChild(sub);
+        }
+    });
+}
+
+// ===== TAB SWITCHING =====
+document.querySelectorAll('.tab-button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        state.tab = btn.dataset.tab;
+        document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(state.tab).classList.add('active');
+        updateMonthAvailability();
+        renderActiveTab();
+    });
+});
+
+// ===== SIDEBAR TOGGLE =====
+document.getElementById('openSidebar').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.add('open');
+    document.getElementById('overlay').classList.add('open');
+});
+document.getElementById('closeSidebar').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('overlay').classList.remove('open');
+});
+document.getElementById('overlay').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('overlay').classList.remove('open');
+});
+
+// Section collapse
+document.querySelectorAll('.section-header').forEach(h => {
+    h.addEventListener('click', () => {
+        const body = h.nextElementSibling;
+        body.classList.toggle('collapsed');
+        h.querySelector('.section-toggle').textContent = body.classList.contains('collapsed') ? '\u25b6' : '\u25bc';
+    });
+});
+
+// Section actions
+document.getElementById('periodsAll').addEventListener('click', () => {
+    document.querySelectorAll('#periodsTree input:not(:disabled)').forEach(c => {
+        c.checked = true;
+        if (c.dataset.month) state.months.add(c.dataset.month);
+    });
+    document.querySelectorAll('.year-label input').forEach(c => c.checked = true);
+    onFilterChange();
+});
+
+document.getElementById('periodsNone').addEventListener('click', () => {
+    document.querySelectorAll('#periodsTree input').forEach(c => {
+        c.checked = false;
+        c.indeterminate = false;
+    });
+    state.months.clear();
+    onFilterChange();
+});
+
+document.getElementById('teamsAll').addEventListener('click', () => {
+    document.querySelectorAll('#teamsTree input').forEach(c => c.checked = true);
+    updateSelections();
+});
+
+document.getElementById('teamsNone').addEventListener('click', () => {
+    document.querySelectorAll('#teamsTree input').forEach(c => c.checked = false);
+    state.employees.clear();
+    state.teams.clear();
+    onFilterChange();
+});
+
+document.getElementById('clientsAll').addEventListener('click', () => {
+    state.clients = new Set(D.clients||[]);
+    document.querySelectorAll('#clientList input').forEach(c => c.checked = true);
+    onFilterChange();
+});
+
+document.getElementById('clientsNone').addEventListener('click', () => {
+    state.clients.clear();
+    document.querySelectorAll('#clientList input').forEach(c => c.checked = false);
+    onFilterChange();
+});
+
+// INIT
+buildPeriods();
+buildTeams();
+buildClients();
+updateFilterSummary();
+renderOpsTab();
