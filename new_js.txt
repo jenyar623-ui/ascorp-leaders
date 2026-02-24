@@ -1,4 +1,13 @@
 
+// Chart.js global defaults
+Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
+Chart.defaults.plugins.tooltip.backgroundColor = '#1e2130';
+Chart.defaults.plugins.tooltip.borderColor = '#2a2d3a';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 10;
+Chart.defaults.plugins.tooltip.cornerRadius = 6;
+Chart.defaults.plugins.tooltip.boxPadding = 4;
+
 // Russian month names in order
 const MONTH_NAMES = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const MONTH_NUM = {'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6, 'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12};
@@ -309,6 +318,74 @@ function buildClients() {
 function onFilterChange() {
     updateFilterSummary();
     renderActiveTab();
+    saveState();
+}
+
+// ===== STATE PERSISTENCE =====
+function saveState() {
+    try {
+        sessionStorage.setItem('dashboardState', JSON.stringify({
+            tab: state.tab,
+            months: [...state.months],
+            employees: [...state.employees],
+            teams: [...state.teams],
+            clients: [...state.clients]
+        }));
+    } catch (e) {}
+}
+
+function restoreState() {
+    try {
+        const saved = sessionStorage.getItem('dashboardState');
+        if (!saved) return false;
+        const s = JSON.parse(saved);
+        state.tab = s.tab || 'ops';
+        state.months = new Set(s.months || []);
+        state.employees = new Set(s.employees || []);
+        state.teams = new Set(s.teams || []);
+        state.clients = new Set(s.clients || []);
+
+        // Sync period checkboxes
+        document.querySelectorAll('#periodsTree input[data-month]').forEach(cb => {
+            cb.checked = state.months.has(cb.dataset.month);
+        });
+        document.querySelectorAll('.year-node').forEach(node => {
+            syncYearCheckbox(node.querySelector('.year-label input'), node.querySelector('.year-months'));
+        });
+
+        // Sync team/employee checkboxes
+        document.querySelectorAll('#teamsTree input[data-team]').forEach(cb => {
+            cb.checked = state.teams.has(cb.dataset.team);
+        });
+        document.querySelectorAll('#teamsTree input[data-emp]').forEach(cb => {
+            cb.checked = state.employees.has(cb.dataset.emp);
+        });
+        document.querySelectorAll('#teamsTree > .tree-node').forEach(gn => {
+            const gcb = gn.querySelector(':scope > .tree-label > input');
+            const all = gn.querySelectorAll('.tree-children input[type="checkbox"]');
+            const checked = gn.querySelectorAll('.tree-children input[type="checkbox"]:checked');
+            gcb.checked = all.length > 0 && checked.length === all.length;
+            gcb.indeterminate = checked.length > 0 && checked.length < all.length;
+        });
+
+        // Sync client checkboxes
+        document.querySelectorAll('#clientList input[data-client]').forEach(cb => {
+            cb.checked = state.clients.has(cb.dataset.client);
+        });
+
+        // Switch tab if needed
+        if (state.tab !== 'ops') {
+            document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector('.tab-button[data-tab="' + state.tab + '"]').classList.add('active');
+            document.getElementById(state.tab).classList.add('active');
+        }
+
+        updateMonthAvailability();
+        return true;
+    } catch (e) {
+        return false;
+    }
 }
 
 function updateFilterSummary() {
@@ -337,12 +414,13 @@ function renderOpsTab() {
     if (isEmp) data = D.emp_monthly.filter(d => months.includes(d.month) && emps.includes(d.employee));
     else data = D.sg_monthly.filter(d => months.includes(d.month));
 
-    let tzt=0, normAdj=0, bizTotal=0, zadTotal=0, vzTotal=0, tphb=0, tphz=0, tpha=0, cnt=0;
+    let tzt=0, normAdj=0, bizTotal=0, zadTotal=0, regTotal=0, vzTotal=0, tphb=0, tphz=0, tpha=0, cnt=0;
     data.forEach(d=>{
         tzt += d.tzt||0;
         normAdj += adjNorm(d.month, d.norm||0);
         bizTotal += d.tk_b||0;
         zadTotal += d.ts_b||0;
+        regTotal += d.tk_r||0;
         vzTotal += d.vz||0;
         tphb += (d.tph_b||0);
         tphz += (d.tph_z||0);
@@ -355,13 +433,15 @@ function renderOpsTab() {
     const avgTphz = cnt>0 ? (tphz/cnt).toFixed(2) : 0;
     const avgTpha = cnt>0 ? (tpha/cnt).toFixed(2) : 0;
 
+    const bizAll = bizTotal + zadTotal;
+
     document.getElementById('opsKpiRow').innerHTML =
-        '<div class="kpi-card"><div class="kpi-label">Трудозатраты</div><div class="kpi-value">'+tzt.toFixed(1)+'</div><div class="kpi-subtext">часов</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Загрузка</div><div class="kpi-value">'+util+'%</div><div class="kpi-subtext"><span class="badge '+ub+'">'+(util>=80?'Высокая':util>=50?'Средняя':'Низкая')+'</span></div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Бизнес заявки</div><div class="kpi-value">'+bizTotal+'</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Бизнес задачи</div><div class="kpi-value">'+zadTotal+'</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Выезды</div><div class="kpi-value">'+vzTotal+'</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Заявки в час (заявки / задачи / все)</div><div class="kpi-value">'+avgTphb+' / '+avgTphz+' / '+avgTpha+'</div></div>';
+        '<div class="kpi-card" style="--kpi-accent:#6366f1"><div class="kpi-label">Трудозатраты</div><div class="kpi-value">'+tzt.toFixed(1)+'</div><div class="kpi-subtext">часов</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:'+(util>=80?'#4ade80':util>=50?'#fbbf24':'#f87171')+'"><div class="kpi-label">Загрузка</div><div class="kpi-value">'+util+'%</div><div class="kpi-subtext"><span class="badge '+ub+'">'+(util>=80?'Высокая':util>=50?'Средняя':'Низкая')+'</span></div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#8b5cf6"><div class="kpi-label">Бизнес обращения</div><div class="kpi-value">'+bizAll+'</div><div class="kpi-subtext"><span>заявки: '+bizTotal+' / задачи: '+zadTotal+'</span></div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#06b6d4"><div class="kpi-label">Рег. заявки</div><div class="kpi-value">'+regTotal+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#f59e0b"><div class="kpi-label">Выезды</div><div class="kpi-value">'+vzTotal+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#22c55e"><div class="kpi-label">Продуктивность</div><div class="kpi-value">'+avgTpha+'</div><div class="kpi-subtext"><span>бизнес-обращений / час</span></div></div>';
 
     renderOpsLoad(data, isEmp, months);
     renderOpsProd(data, isEmp, months);
@@ -400,7 +480,7 @@ function renderOpsLoad(data, isEmp, months) {
                 return v && v.n>0 ? ((v.t/v.n)*100).toFixed(1) : 0;
             }),
             backgroundColor: MC[i%MC.length],
-            borderWidth: 0
+            borderWidth: 0, borderRadius: 3
         }));
         if (charts.oL) charts.oL.destroy();
         charts.oL = new Chart(document.getElementById('opsLoadChart').getContext('2d'), {
@@ -412,7 +492,7 @@ function renderOpsLoad(data, isEmp, months) {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: {labels: {color: '#8b8fa3'}},
-                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                    tooltip: {}
                 },
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, max: 120},
@@ -441,7 +521,7 @@ function renderOpsLoad(data, isEmp, months) {
                     label: 'Загрузка %',
                     data: vals,
                     backgroundColor: vals.map(v => v>=80 ? '#22c55e' : v>=50 ? '#f59e0b' : '#ef4444'),
-                    borderWidth: 0
+                    borderWidth: 0, borderRadius: 3
                 }]
             },
             options: {
@@ -450,7 +530,7 @@ function renderOpsLoad(data, isEmp, months) {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: {display: false},
-                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                    tooltip: {}
                 },
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, max: 120},
@@ -492,7 +572,7 @@ function renderOpsProd(data, isEmp, months) {
                 return v && v.t>0 ? (v.tk/v.t).toFixed(2) : 0;
             }),
             backgroundColor: MC[i%MC.length],
-            borderWidth: 0
+            borderWidth: 0, borderRadius: 3
         }));
         if (charts.oP) charts.oP.destroy();
         charts.oP = new Chart(document.getElementById('opsProductivityChart').getContext('2d'), {
@@ -504,7 +584,7 @@ function renderOpsProd(data, isEmp, months) {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: {labels: {color: '#8b8fa3'}},
-                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                    tooltip: {}
                 },
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -532,7 +612,7 @@ function renderOpsProd(data, isEmp, months) {
                     label: 'Заявки / час',
                     data: vals,
                     backgroundColor: '#6366f1',
-                    borderWidth: 0
+                    borderWidth: 0, borderRadius: 3
                 }]
             },
             options: {
@@ -541,7 +621,7 @@ function renderOpsProd(data, isEmp, months) {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: {display: false},
-                    tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                    tooltip: {}
                 },
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -566,11 +646,11 @@ function renderOpsDyn(data, isEmp, months) {
             type: 'bar',
             data: {
                 labels: s.map(x => x[0]),
-                datasets: [{label: 'ТЗТ (ч)', data: s.map(x => x[1].toFixed(1)), backgroundColor: '#6366f1', borderWidth: 0}]
+                datasets: [{label: 'ТЗТ (ч)', data: s.map(x => x[1].toFixed(1)), backgroundColor: '#6366f1', borderWidth: 0, borderRadius: 3}]
             },
             options: {
                 indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-                plugins: {legend: {display: false}, tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}},
+                plugins: {legend: {display: false}, tooltip: {}},
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                     y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
@@ -597,7 +677,7 @@ function renderOpsDyn(data, isEmp, months) {
         label: n,
         data: months.map(m => (md[m]||0).toFixed(1)),
         backgroundColor: MC[i%MC.length],
-        borderWidth: 0
+        borderWidth: 0, borderRadius: 3
     }));
     if (charts.oD) charts.oD.destroy();
     charts.oD = new Chart(document.getElementById('opsDynamicsChart').getContext('2d'), {
@@ -608,7 +688,7 @@ function renderOpsDyn(data, isEmp, months) {
             maintainAspectRatio: false,
             plugins: {
                 legend: {labels: {color: '#8b8fa3', font: {size: 11}}},
-                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                tooltip: {}
             },
             scales: {
                 x: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -617,6 +697,9 @@ function renderOpsDyn(data, isEmp, months) {
         }
     });
 }
+
+// Table sort state
+let opsSort = {col: 'tzt', dir: 'desc'};
 
 function renderOpsTable(data, isEmp, months) {
     const tbody = document.getElementById('opsTableBody');
@@ -631,27 +714,48 @@ function renderOpsTable(data, isEmp, months) {
         pivot[key].months[d.month] = d;
     });
 
-    // Sort keys by total TZT descending
+    // Compute totals per key for sorting
+    const keyTotals = {};
+    Object.keys(pivot).forEach(key => {
+        const e = pivot[key];
+        let t = {tzt:0,normAdj:0,biz:0,zad:0,reg:0,vz:0,bizAll:0};
+        Object.entries(e.months).forEach(([mo,m]) => {
+            if (m) {
+                t.tzt += m.tzt||0;
+                t.normAdj += adjNorm(mo, m.norm||0);
+                t.biz += m.tk_b||0;
+                t.zad += m.ts_b||0;
+                t.reg += m.tk_r||0;
+                t.vz += m.vz||0;
+            }
+        });
+        t.bizAll = t.biz + t.zad;
+        t.util = t.normAdj > 0 ? t.tzt / t.normAdj * 100 : 0;
+        t.name = key;
+        keyTotals[key] = t;
+    });
+
+    // Sort keys
+    const sortVal = (k) => {
+        const t = keyTotals[k];
+        if (opsSort.col === 'name') return k.toLowerCase();
+        return t[opsSort.col] || 0;
+    };
     const keys = Object.keys(pivot).sort((a, b) => {
-        const tzta = Object.values(pivot[a].months).reduce((s, m) => s + (m.tzt||0), 0);
-        const tztb = Object.values(pivot[b].months).reduce((s, m) => s + (m.tzt||0), 0);
-        return tztb - tzta;
+        const va = sortVal(a), vb = sortVal(b);
+        if (typeof va === 'string') return opsSort.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+        return opsSort.dir === 'asc' ? va - vb : vb - va;
+    });
+
+    // Update sort indicators in header
+    document.querySelectorAll('#opsTableHead th.sortable').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (th.dataset.col === opsSort.col) th.classList.add(opsSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
     });
 
     keys.forEach(key => {
         const entry = pivot[key];
-        let totalTzt = 0, totalNormAdj = 0, totalBiz = 0, totalZad = 0, totalVz = 0;
-
-        // Calculate totals
-        Object.entries(entry.months).forEach(([mo, m]) => {
-            if (m) {
-                totalTzt += m.tzt||0;
-                totalNormAdj += adjNorm(mo, m.norm||0);
-                totalBiz += m.tk_b||0;
-                totalZad += m.ts_b||0;
-                totalVz += m.vz||0;
-            }
-        });
+        const t = keyTotals[key];
 
         // Render one row per month
         months.forEach(month => {
@@ -674,6 +778,8 @@ function renderOpsTable(data, isEmp, months) {
                 '<td><span class="badge '+ub+'">'+util+'%</span></td>'+
                 '<td>'+biz+'</td>'+
                 '<td>'+zad+'</td>'+
+                '<td>'+(biz+zad)+'</td>'+
+                '<td>'+(m.tk_r||0)+'</td>'+
                 '<td>'+(m.vz||0)+'</td>'+
                 '<td>'+(m.tph_b||0).toFixed(2)+'</td>'+
                 '<td>'+(m.tph_z||0).toFixed(2)+'</td>'+
@@ -683,7 +789,7 @@ function renderOpsTable(data, isEmp, months) {
 
         // Add subtotal row if multiple months
         if (months.length > 1) {
-            const totalUtil = totalNormAdj>0 ? ((totalTzt/totalNormAdj)*100).toFixed(1) : 0;
+            const totalUtil = t.normAdj>0 ? (t.util).toFixed(1) : 0;
             const totalUb = totalUtil>=80 ? 'badge-green' : totalUtil>=50 ? 'badge-orange' : 'badge-red';
             const sub = document.createElement('tr');
             sub.className = 'ops-subtotal-row';
@@ -691,12 +797,14 @@ function renderOpsTable(data, isEmp, months) {
                 '<td>'+key+' (итого)</td>'+
                 '<td></td>'+
                 '<td>Всего</td>'+
-                '<td>'+totalTzt.toFixed(1)+'</td>'+
-                '<td>'+totalNormAdj.toFixed(0)+'</td>'+
+                '<td>'+t.tzt.toFixed(1)+'</td>'+
+                '<td>'+t.normAdj.toFixed(0)+'</td>'+
                 '<td><span class="badge '+totalUb+'">'+totalUtil+'%</span></td>'+
-                '<td>'+totalBiz+'</td>'+
-                '<td>'+totalZad+'</td>'+
-                '<td>'+totalVz+'</td>'+
+                '<td>'+t.biz+'</td>'+
+                '<td>'+t.zad+'</td>'+
+                '<td>'+t.bizAll+'</td>'+
+                '<td>'+t.reg+'</td>'+
+                '<td>'+t.vz+'</td>'+
                 '<td></td><td></td><td></td>';
             tbody.appendChild(sub);
         }
@@ -738,11 +846,11 @@ function renderClientTab() {
     const pP = tT>0 ? ((tP/tT)*100).toFixed(1) : 0;
 
     document.getElementById('clientKpiRow').innerHTML =
-        '<div class="kpi-card"><div class="kpi-label">ТЗТ всего</div><div class="kpi-value">'+tT.toFixed(1)+'</div><div class="kpi-subtext">опер: '+tO.toFixed(1)+' / проект: '+tP.toFixed(1)+'</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Доля проектов</div><div class="kpi-value">'+pP+'%</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Заявки</div><div class="kpi-value">'+tI+' / '+tR+'</div><div class="kpi-subtext">поступило / решено</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Выполнено в срок</div><div class="kpi-value">'+avgSla+'%</div></div>'+
-        '<div class="kpi-card"><div class="kpi-label">Массовые инциденты</div><div class="kpi-value">'+mi+'</div></div>';
+        '<div class="kpi-card" style="--kpi-accent:#6366f1"><div class="kpi-label">ТЗТ всего</div><div class="kpi-value">'+tT.toFixed(1)+'</div><div class="kpi-subtext"><span>опер: '+tO.toFixed(1)+' / проект: '+tP.toFixed(1)+'</span></div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#8b5cf6"><div class="kpi-label">Доля проектов</div><div class="kpi-value">'+pP+'%</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#f59e0b"><div class="kpi-label">Заявки</div><div class="kpi-value">'+tI+' / '+tR+'</div><div class="kpi-subtext"><span>поступило / решено</span></div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#22c55e"><div class="kpi-label">Выполнено в срок</div><div class="kpi-value">'+avgSla+'%</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#ef4444"><div class="kpi-label">Массовые инциденты</div><div class="kpi-value">'+mi+'</div></div>';
 
     renderClTzt(tztD);
     renderClOp(tztD);
@@ -764,14 +872,14 @@ function renderClTzt(data) {
     if (charts.cT) charts.cT.destroy();
     charts.cT = new Chart(document.getElementById('clientTztChart').getContext('2d'), {
         type: 'bar',
-        data: {labels, datasets: [{label: 'ТЗТ', data: vals, backgroundColor: '#6366f1', borderWidth: 0}]},
+        data: {labels, datasets: [{label: 'ТЗТ', data: vals, backgroundColor: '#6366f1', borderWidth: 0, borderRadius: 3}]},
         options: {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
                 legend: {display: false},
-                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                tooltip: {}
             },
             scales: {
                 x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -814,8 +922,8 @@ function renderClOp(data) {
         data: {
             labels: s.map(x => x[0]),
             datasets: [
-                {label: 'Операционка', data: s.map(x => x[1].o), backgroundColor: '#6366f1', borderWidth: 0},
-                {label: 'Проекты', data: s.map(x => x[1].p), backgroundColor: '#8b5cf6', borderWidth: 0}
+                {label: 'Операционка', data: s.map(x => x[1].o), backgroundColor: '#6366f1', borderWidth: 0, borderRadius: 3},
+                {label: 'Проекты', data: s.map(x => x[1].p), backgroundColor: '#8b5cf6', borderWidth: 0, borderRadius: 3}
             ]
         },
         options: {
@@ -824,7 +932,7 @@ function renderClOp(data) {
             maintainAspectRatio: false,
             plugins: {
                 legend: {labels: {color: '#8b8fa3'}},
-                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                tooltip: {}
             },
             scales: {
                 x: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -912,8 +1020,8 @@ function renderClTk(data) {
         data: {
             labels: months,
             datasets: [
-                {label: 'Поступило', data: months.map(m => a[m].i), backgroundColor: '#f59e0b', borderWidth: 0},
-                {label: 'Решено', data: months.map(m => a[m].r), backgroundColor: '#22c55e', borderWidth: 0}
+                {label: 'Поступило', data: months.map(m => a[m].i), backgroundColor: '#f59e0b', borderWidth: 0, borderRadius: 3},
+                {label: 'Решено', data: months.map(m => a[m].r), backgroundColor: '#22c55e', borderWidth: 0, borderRadius: 3}
             ]
         },
         options: {
@@ -921,7 +1029,7 @@ function renderClTk(data) {
             maintainAspectRatio: false,
             plugins: {
                 legend: {labels: {color: '#8b8fa3'}},
-                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                tooltip: {}
             },
             scales: {
                 x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -942,7 +1050,11 @@ function renderClSla(data) {
     });
     const months = Array.from(D.months_cl || []).filter(m => a[m]).sort(monthLabelSort);
     if (charts.cS) charts.cS.destroy();
-    charts.cS = new Chart(document.getElementById('clientSlaChart').getContext('2d'), {
+    const slaCtx = document.getElementById('clientSlaChart').getContext('2d');
+    const slaGrad = slaCtx.createLinearGradient(0, 0, 0, 300);
+    slaGrad.addColorStop(0, 'rgba(99, 102, 241, 0.25)');
+    slaGrad.addColorStop(1, 'rgba(99, 102, 241, 0.02)');
+    charts.cS = new Chart(slaCtx, {
         type: 'line',
         data: {
             labels: months,
@@ -950,11 +1062,14 @@ function renderClSla(data) {
                 label: 'Выполнено в срок %',
                 data: months.map(m => a[m].cnt>0 ? (a[m].sum/a[m].cnt).toFixed(1) : null),
                 borderColor: '#6366f1',
-                backgroundColor: '#6366f120',
+                backgroundColor: slaGrad,
                 tension: 0.4,
                 fill: true,
                 pointRadius: 5,
-                pointBackgroundColor: '#6366f1'
+                pointBackgroundColor: '#6366f1',
+                pointBorderColor: '#1a1d27',
+                pointBorderWidth: 2,
+                pointHoverRadius: 7
             }]
         },
         options: {
@@ -962,7 +1077,7 @@ function renderClSla(data) {
             maintainAspectRatio: false,
             plugins: {
                 legend: {display: false},
-                tooltip: {backgroundColor: '#2a2d3a', titleColor: '#e4e6ef', bodyColor: '#e4e6ef'}
+                tooltip: {}
             },
             scales: {
                 x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
@@ -1100,6 +1215,17 @@ document.querySelectorAll('.tab-button').forEach(btn => {
         document.getElementById(state.tab).classList.add('active');
         updateMonthAvailability();
         renderActiveTab();
+        saveState();
+    });
+});
+
+// ===== OPS TABLE SORT =====
+document.querySelectorAll('#opsTableHead th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (opsSort.col === col) opsSort.dir = opsSort.dir === 'asc' ? 'desc' : 'asc';
+        else { opsSort.col = col; opsSort.dir = 'desc'; }
+        renderActiveTab();
     });
 });
 
@@ -1173,5 +1299,6 @@ document.getElementById('clientsNone').addEventListener('click', () => {
 buildPeriods();
 buildTeams();
 buildClients();
+restoreState();
 updateFilterSummary();
-renderOpsTab();
+renderActiveTab();

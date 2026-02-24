@@ -9,7 +9,7 @@
     </div>
 
     <div class="tabs">
-        <button class="tab-button active" data-tab="ops">Операционный (ежедневный)</button>
+        <button class="tab-button active" data-tab="ops">Операционный отчёт</button>
         <button class="tab-button" data-tab="client">Клиентский (ежемесячный)</button>
     </div>
 
@@ -34,19 +34,21 @@
             <div class="chart-title">Данные по командам/сотрудникам</div>
             <table>
                 <thead>
-                    <tr>
-                        <th>Команда / Сотрудник</th>
+                    <tr id="opsTableHead">
+                        <th class="sortable" data-col="name">Команда / Сотрудник</th>
                         <th>Группа</th>
                         <th>Месяц</th>
-                        <th>Трудозатраты (ч)</th>
+                        <th class="sortable" data-col="tzt">ТЗТ (ч)</th>
                         <th>Норма (ч)</th>
-                        <th>Загрузка %</th>
-                        <th>Бизнес заявки</th>
-                        <th>Бизнес задачи</th>
-                        <th>Выезды</th>
-                        <th>Заявок/ч (заявки)</th>
-                        <th>Заявок/ч (задачи)</th>
-                        <th>Заявок/ч (все)</th>
+                        <th class="sortable" data-col="util">Загрузка %</th>
+                        <th class="sortable" data-col="biz">Б.заявки</th>
+                        <th class="sortable" data-col="zad">Б.задачи</th>
+                        <th class="sortable" data-col="bizAll">Σ Бизнес</th>
+                        <th class="sortable" data-col="reg">Рег.заявки</th>
+                        <th class="sortable" data-col="vz">Выезды</th>
+                        <th>Б.заявки/ч</th>
+                        <th>Б.задачи/ч</th>
+                        <th>Бизнес-всего/ч</th>
                     </tr>
                 </thead>
                 <tbody id="opsTableBody"></tbody>
