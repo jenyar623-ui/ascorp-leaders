@@ -18,6 +18,7 @@ import time
 import shutil
 import tempfile
 import argparse
+import subprocess
 from datetime import datetime
 from collections import defaultdict
 
@@ -756,12 +757,43 @@ def copy_to_leaders():
         print(f"Leaders: copy failed — {e}")
 
 
+def deploy_netlify():
+    """Deploy dashboard to Netlify (if CLI available)."""
+    site_dir = os.path.join(SCRIPT_DIR, '_site')
+    os.makedirs(site_dir, exist_ok=True)
+    shutil.copy2(HTML_OUTPUT, os.path.join(site_dir, 'index.html'))
+    try:
+        result = subprocess.run(
+            ['npx', 'netlify-cli', 'deploy', '--prod', '--dir=_site', '--no-build'],
+            cwd=SCRIPT_DIR, capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            # Extract URL from output
+            for line in result.stdout.split('\n'):
+                if 'netlify.app' in line and 'Production' not in line and 'deploy URL' not in line:
+                    continue
+                if 'netlify.app' in line:
+                    print(f"Netlify: {line.strip()}")
+                    break
+            else:
+                print("Netlify: deployed successfully")
+        else:
+            print(f"Netlify: deploy failed — {result.stderr[:200]}")
+    except FileNotFoundError:
+        print("Netlify: CLI not found, skipping deploy")
+    except subprocess.TimeoutExpired:
+        print("Netlify: deploy timed out")
+    except Exception as e:
+        print(f"Netlify: deploy error — {e}")
+
+
 def build():
     start = time.time()
     data = build_data()
     write_json(data)
     build_html()
     copy_to_leaders()
+    deploy_netlify()
     elapsed = time.time() - start
     print(f"\nBuild complete in {elapsed:.1f}s")
 
