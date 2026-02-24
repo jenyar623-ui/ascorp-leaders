@@ -27,13 +27,16 @@ The dashboard has two main views:
 | `new_body.txt` | HTML body markup (both tabs + sidebar) — ~160 lines |
 | `new_js.txt` | JavaScript logic (filters, charts, tables) — ~1180 lines |
 | `DASHBOARD_DOCUMENTATION.md` | Full technical documentation (in Russian) |
-| `data-sources/` | Original Excel files used to generate `v3_data.json` (git-ignored) |
 
-## Data Sources (in `data-sources/`, git-ignored)
+## Data Sources (OneDrive, read via temp-copy)
 
 - `Операционные отчеты (ежедневные).xlsx` — daily operational reports by team (Dec 2025 – Feb 2026)
 - `Отчет по клиентам (ежемесячный).xlsx` — monthly client reports (Aug 2025 – Jan 2026)
-- `P&L 2021.xlsx` — profit & loss data
+- Path: `~/Library/CloudStorage/OneDrive-AscorpSP/My Obsidian/FinancesDocs/`
+
+## Leaders Dashboards
+
+After each build, `dashboard_v7.html` is automatically copied to OneDrive `Leaders Dashboards/` as `teams-customers-dashboard.html` for sharing with colleagues.
 
 ## How to Run / View
 
@@ -76,3 +79,9 @@ const D = {data_json};
 with open('dashboard_v7.html', 'w') as f:
     f.write(html)
 ```
+
+## Safety
+
+- Excel files are never opened directly — `safe_load_workbook()` copies to a temp file first, reads, then deletes the temp
+- This prevents any interaction with the original (OneDrive locks, sync conflicts, Data Validation preservation)
+- Retry logic (3 attempts, 5s delay) handles transient OneDrive sync issues (e.g. `BadZipFile` errors during sync)

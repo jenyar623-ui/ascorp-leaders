@@ -15,6 +15,8 @@ import os
 import sys
 import json
 import time
+import shutil
+import tempfile
 import argparse
 from datetime import datetime
 from collections import defaultdict
@@ -35,6 +37,8 @@ HTML_OUTPUT = os.path.join(SCRIPT_DIR, "dashboard_v7.html")
 CSS_PATH = os.path.join(SCRIPT_DIR, "new_css.txt")
 BODY_PATH = os.path.join(SCRIPT_DIR, "new_body.txt")
 JS_PATH = os.path.join(SCRIPT_DIR, "new_js.txt")
+LEADERS_DIR = os.path.expanduser("~/Library/CloudStorage/OneDrive-AscorpSP/Leaders Dashboards")
+LEADERS_HTML = os.path.join(LEADERS_DIR, "teams-customers-dashboard.html")
 
 # === CONFIGURATION ===
 
@@ -101,6 +105,35 @@ SKIP_NAMES = {
 
 
 # === HELPERS ===
+
+def safe_load_workbook(path, max_retries=3, retry_delay=5):
+    """Load Excel workbook via a temporary copy for safety.
+
+    Copies the file to a temp location before reading to avoid any interaction
+    with the original file (OneDrive sync, Excel locks, etc.).
+    Retries on failure (e.g. file being synced).
+    """
+    for attempt in range(1, max_retries + 1):
+        tmp_path = None
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix='.xlsx')
+            os.close(tmp_fd)
+            shutil.copy2(path, tmp_path)
+            wb = openpyxl.load_workbook(tmp_path, data_only=True)
+            return wb
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"  Retry {attempt}/{max_retries} loading {os.path.basename(path)}: {e}")
+                time.sleep(retry_delay)
+            else:
+                raise
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
 
 def safe_float(v):
     if v is None:
@@ -275,7 +308,7 @@ def parse_ops_sheet(wb, sheet_name, config):
 
 def parse_all_ops(ops_path):
     print(f"Parsing: {os.path.basename(ops_path)}")
-    wb = openpyxl.load_workbook(ops_path, data_only=True)
+    wb = safe_load_workbook(ops_path)
     all_daily = []
     for sheet_name, config in SHEET_CONFIG.items():
         records = parse_ops_sheet(wb, sheet_name, config)
@@ -583,7 +616,7 @@ def parse_cl_mass(wb, canonical_clients):
 
 def parse_all_client(client_path):
     print(f"Parsing: {os.path.basename(client_path)}")
-    wb = openpyxl.load_workbook(client_path, data_only=True)
+    wb = safe_load_workbook(client_path)
 
     cl_tzt, canonical_clients = parse_cl_tzt(wb)
     print(f"  данные тзт: {len(cl_tzt)} records")
@@ -710,11 +743,22 @@ const D = {data_json};
     print(f"HTML: {HTML_OUTPUT} ({size_kb:.0f} KB)")
 
 
+def copy_to_leaders():
+    """Copy dashboard HTML to OneDrive Leaders Dashboards for sharing."""
+    try:
+        os.makedirs(LEADERS_DIR, exist_ok=True)
+        shutil.copy2(HTML_OUTPUT, LEADERS_HTML)
+        print(f"Leaders: copied to {LEADERS_HTML}")
+    except Exception as e:
+        print(f"Leaders: copy failed — {e}")
+
+
 def build():
     start = time.time()
     data = build_data()
     write_json(data)
     build_html()
+    copy_to_leaders()
     elapsed = time.time() - start
     print(f"\nBuild complete in {elapsed:.1f}s")
 
