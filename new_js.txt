@@ -8,6 +8,35 @@ Chart.defaults.plugins.tooltip.padding = 10;
 Chart.defaults.plugins.tooltip.cornerRadius = 6;
 Chart.defaults.plugins.tooltip.boxPadding = 4;
 
+// Animated count-up for KPI values
+function animateCountUp(el, target, suffix, duration) {
+    suffix = suffix || '';
+    duration = duration || 600;
+    var isFloat = String(target).indexOf('.') !== -1;
+    var decimals = isFloat ? (String(target).split('.')[1]||'').length : 0;
+    var start = performance.now();
+    var to = parseFloat(target);
+    if (isNaN(to)) { el.textContent = target + suffix; return; }
+    function tick(now) {
+        var p = Math.min((now - start) / duration, 1);
+        var ease = 1 - Math.pow(1 - p, 3);
+        var val = to * ease;
+        el.textContent = (isFloat ? val.toFixed(decimals) : Math.round(val)) + suffix;
+        if (p < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+}
+
+// Trend arrow HTML: compare current vs previous value
+function trendHtml(cur, prev) {
+    if (prev == null || prev === 0) return '';
+    var pct = ((cur - prev) / Math.abs(prev) * 100).toFixed(0);
+    if (pct == 0) return '<span class="trend-flat">\u2014</span>';
+    var cls = pct > 0 ? 'trend-up' : 'trend-down';
+    var arrow = pct > 0 ? '&#9650;' : '&#9660;';
+    return '<span class="'+cls+'">'+arrow+' '+Math.abs(pct)+'%</span>';
+}
+
 // Russian month names in order
 const MONTH_NAMES = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 const MONTH_NUM = {'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6, 'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12};
@@ -435,18 +464,103 @@ function renderOpsTab() {
 
     const bizAll = bizTotal + zadTotal;
 
+    // Trend calculation: compare last 2 months
+    var trendTzt='', trendUtil='', trendBiz='', trendReg='', trendVz='', trendTpha='';
+    var sorted = months.slice().sort(monthLabelSort);
+    if (sorted.length >= 2) {
+        var curM = sorted[sorted.length - 1];
+        var prevM = sorted[sorted.length - 2];
+        var cur = {tzt:0,norm:0,biz:0,reg:0,vz:0,tpha:0,cnt:0};
+        var prev = {tzt:0,norm:0,biz:0,reg:0,vz:0,tpha:0,cnt:0};
+        data.forEach(function(d) {
+            var bucket = d.month === curM ? cur : d.month === prevM ? prev : null;
+            if (!bucket) return;
+            bucket.tzt += d.tzt||0;
+            bucket.norm += adjNorm(d.month, d.norm||0);
+            bucket.biz += (d.tk_b||0) + (d.ts_b||0);
+            bucket.reg += d.tk_r||0;
+            bucket.vz += d.vz||0;
+            bucket.tpha += d.tph_all||0;
+            bucket.cnt++;
+        });
+        var curUtil = cur.norm>0 ? cur.tzt/cur.norm*100 : 0;
+        var prevUtil = prev.norm>0 ? prev.tzt/prev.norm*100 : 0;
+        var curAvgTpha = cur.cnt>0 ? cur.tpha/cur.cnt : 0;
+        var prevAvgTpha = prev.cnt>0 ? prev.tpha/prev.cnt : 0;
+        trendTzt = trendHtml(cur.tzt, prev.tzt);
+        trendUtil = trendHtml(curUtil, prevUtil);
+        trendBiz = trendHtml(cur.biz, prev.biz);
+        trendReg = trendHtml(cur.reg, prev.reg);
+        trendVz = trendHtml(cur.vz, prev.vz);
+        trendTpha = trendHtml(curAvgTpha, prevAvgTpha);
+    }
+
     document.getElementById('opsKpiRow').innerHTML =
-        '<div class="kpi-card" style="--kpi-accent:#6366f1"><div class="kpi-label">Трудозатраты</div><div class="kpi-value">'+tzt.toFixed(1)+'</div><div class="kpi-subtext">часов</div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:'+(util>=80?'#4ade80':util>=50?'#fbbf24':'#f87171')+'"><div class="kpi-label">Загрузка</div><div class="kpi-value">'+util+'%</div><div class="kpi-subtext"><span class="badge '+ub+'">'+(util>=80?'Высокая':util>=50?'Средняя':'Низкая')+'</span></div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#8b5cf6"><div class="kpi-label">Бизнес обращения</div><div class="kpi-value">'+bizAll+'</div><div class="kpi-subtext"><span>заявки: '+bizTotal+' / задачи: '+zadTotal+'</span></div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#06b6d4"><div class="kpi-label">Рег. заявки</div><div class="kpi-value">'+regTotal+'</div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#f59e0b"><div class="kpi-label">Выезды</div><div class="kpi-value">'+vzTotal+'</div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#22c55e"><div class="kpi-label">Продуктивность</div><div class="kpi-value">'+avgTpha+'</div><div class="kpi-subtext"><span>бизнес-обращений / час</span></div></div>';
+        '<div class="kpi-card" style="--kpi-accent:#6366f1"><div class="kpi-label">Трудозатраты</div><div class="kpi-value" data-target="'+tzt.toFixed(1)+'" data-suffix="">'+tzt.toFixed(1)+'</div><div class="kpi-subtext">часов</div><div class="kpi-trend">'+trendTzt+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:'+(util>=80?'#4ade80':util>=50?'#fbbf24':'#f87171')+'"><div class="kpi-label">Загрузка</div><div class="kpi-value" data-target="'+util+'" data-suffix="%">'+util+'%</div><div class="kpi-subtext"><span class="badge '+ub+'">'+(util>=80?'Высокая':util>=50?'Средняя':'Низкая')+'</span></div><div class="kpi-trend">'+trendUtil+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#8b5cf6"><div class="kpi-label">Бизнес обращения</div><div class="kpi-value" data-target="'+bizAll+'" data-suffix="">'+bizAll+'</div><div class="kpi-subtext"><span>заявки: '+bizTotal+' / задачи: '+zadTotal+'</span></div><div class="kpi-trend">'+trendBiz+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#06b6d4"><div class="kpi-label">Рег. заявки</div><div class="kpi-value" data-target="'+regTotal+'" data-suffix="">'+regTotal+'</div><div class="kpi-trend">'+trendReg+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#f59e0b"><div class="kpi-label">Выезды</div><div class="kpi-value" data-target="'+vzTotal+'" data-suffix="">'+vzTotal+'</div><div class="kpi-trend">'+trendVz+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#22c55e"><div class="kpi-label">Продуктивность</div><div class="kpi-value" data-target="'+avgTpha+'" data-suffix="">'+avgTpha+'</div><div class="kpi-subtext"><span>бизнес-обращений / час</span></div><div class="kpi-trend">'+trendTpha+'</div></div>';
+
+    // Animate KPI counters
+    document.querySelectorAll('#opsKpiRow .kpi-value[data-target]').forEach(function(el) {
+        var t = el.getAttribute('data-target');
+        var s = el.getAttribute('data-suffix') || '';
+        animateCountUp(el, t, s);
+    });
 
     renderOpsLoad(data, isEmp, months);
     renderOpsProd(data, isEmp, months);
     renderOpsDyn(data, isEmp, months);
     renderOpsTable(data, isEmp, months);
+}
+
+// Click on ops chart bar → toggle filter to single team/employee
+function opsChartClick(name, isEmp) {
+    if (isEmp) {
+        if (state.employees.size === 1 && state.employees.has(name)) {
+            // Reset: check all employees
+            document.querySelectorAll('#teamsTree input[data-emp]').forEach(function(cb) {
+                cb.checked = true;
+                state.employees.add(cb.dataset.emp);
+            });
+            document.querySelectorAll('#teamsTree input[data-team]').forEach(function(cb) {
+                cb.checked = true;
+                state.teams.add(cb.dataset.team);
+            });
+        } else {
+            // Solo filter
+            state.employees = new Set([name]);
+            document.querySelectorAll('#teamsTree input[data-emp]').forEach(function(cb) {
+                cb.checked = cb.dataset.emp === name;
+            });
+        }
+    } else {
+        if (state.teams.size === 1 && state.teams.has(name)) {
+            // Reset: check all teams
+            document.querySelectorAll('#teamsTree input[data-team]').forEach(function(cb) {
+                cb.checked = true;
+                state.teams.add(cb.dataset.team);
+            });
+            state.employees.clear();
+            document.querySelectorAll('#teamsTree input[data-emp]').forEach(function(cb) {
+                cb.checked = false;
+            });
+        } else {
+            state.teams = new Set([name]);
+            state.employees.clear();
+            document.querySelectorAll('#teamsTree input[data-team]').forEach(function(cb) {
+                cb.checked = cb.dataset.team === name;
+            });
+            document.querySelectorAll('#teamsTree input[data-emp]').forEach(function(cb) {
+                cb.checked = false;
+            });
+        }
+    }
+    updateFilterSummary();
+    renderActiveTab();
+    saveState();
 }
 
 function renderOpsLoad(data, isEmp, months) {
@@ -497,7 +611,9 @@ function renderOpsLoad(data, isEmp, months) {
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, max: 120},
                     y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
-                }
+                },
+                onClick: function(e, el) { if (el.length) opsChartClick(labels[el[0].index], isEmp); },
+                onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
             }
         });
     } else {
@@ -535,7 +651,9 @@ function renderOpsLoad(data, isEmp, months) {
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}, max: 120},
                     y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
-                }
+                },
+                onClick: function(e, el) { if (el.length) opsChartClick(labels[el[0].index], isEmp); },
+                onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
             }
         });
     }
@@ -589,7 +707,9 @@ function renderOpsProd(data, isEmp, months) {
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                     y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
-                }
+                },
+                onClick: function(e, el) { if (el.length) opsChartClick(labels[el[0].index], isEmp); },
+                onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
             }
         });
     } else {
@@ -626,7 +746,9 @@ function renderOpsProd(data, isEmp, months) {
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                     y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
-                }
+                },
+                onClick: function(e, el) { if (el.length) opsChartClick(labels[el[0].index], isEmp); },
+                onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
             }
         });
     }
@@ -641,11 +763,12 @@ function renderOpsDyn(data, isEmp, months) {
             g[k] = (g[k]||0) + (d.tzt||0);
         });
         const s = Object.entries(g).sort((a,b) => b[1] - a[1]);
+        var dynLabels = s.map(x => x[0]);
         if (charts.oD) charts.oD.destroy();
         charts.oD = new Chart(document.getElementById('opsDynamicsChart').getContext('2d'), {
             type: 'bar',
             data: {
-                labels: s.map(x => x[0]),
+                labels: dynLabels,
                 datasets: [{label: 'ТЗТ (ч)', data: s.map(x => x[1].toFixed(1)), backgroundColor: '#6366f1', borderWidth: 0, borderRadius: 3}]
             },
             options: {
@@ -654,7 +777,9 @@ function renderOpsDyn(data, isEmp, months) {
                 scales: {
                     x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                     y: {grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
-                }
+                },
+                onClick: function(e, el) { if (el.length) opsChartClick(dynLabels[el[0].index], isEmp); },
+                onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
             }
         });
         return;
@@ -693,7 +818,15 @@ function renderOpsDyn(data, isEmp, months) {
             scales: {
                 x: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                 y: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}}
-            }
+            },
+            onClick: function(e, el) {
+                if (el.length) {
+                    var dsIdx = el[0].datasetIndex;
+                    var name = ds[dsIdx].label;
+                    opsChartClick(name, isEmp);
+                }
+            },
+            onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
         }
     });
 }
@@ -769,6 +902,13 @@ function renderOpsTable(data, isEmp, months) {
             const zad = m.ts_b||0;
             const tr = document.createElement('tr');
             tr.className = 'ops-data-row';
+            tr.title = [
+                key + ' \u2014 ' + month,
+                '\u0411\u0438\u0437\u043d\u0435\u0441 \u0437\u0430\u044f\u0432\u043a\u0438: ' + biz + ' | \u0417\u0430\u0434\u0430\u0447\u0438: ' + zad,
+                '\u0420\u0435\u0433. \u0437\u0430\u044f\u0432\u043a\u0438: ' + (m.tk_r||0) + ' | \u0420\u0435\u0433. \u0437\u0430\u0434\u0430\u0447\u0438: ' + (m.ts_r||0),
+                '\u041f\u0440\u043e\u0434\u0443\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c: ' + (m.tph_all||0).toFixed(2) + ' \u043e\u0431\u0440/\u0447',
+                '\u0412\u044b\u0435\u0437\u0434\u044b: ' + (m.vz||0)
+            ].join('\n');
             tr.innerHTML =
                 '<td>'+key+'</td>'+
                 '<td>'+entry.group+'</td>'+
@@ -845,12 +985,62 @@ function renderClientTab() {
     const avgSla = slaCnt>0 ? (slaSum/slaCnt).toFixed(1) : '—';
     const pP = tT>0 ? ((tP/tT)*100).toFixed(1) : 0;
 
+    // Client tab trends: compare last 2 months
+    var clTrendTzt='', clTrendPP='', clTrendTk='', clTrendSla='', clTrendMi='';
+    var clSorted = months.slice().sort(monthLabelSort);
+    if (clSorted.length >= 2) {
+        var clCurM = clSorted[clSorted.length - 1];
+        var clPrevM = clSorted[clSorted.length - 2];
+        var clCur = {tzt:0,proj:0,tI:0,tR:0,slaS:0,slaC:0,mi:0};
+        var clPrev = {tzt:0,proj:0,tI:0,tR:0,slaS:0,slaC:0,mi:0};
+        tztD.forEach(function(d) {
+            var b = d.ml === clCurM ? clCur : d.ml === clPrevM ? clPrev : null;
+            if (!b) return;
+            b.tzt += d.tzt||0;
+            if (d.tzt_type === 'проект') b.proj += d.tzt||0;
+        });
+        tkD.forEach(function(d) {
+            var b = d.ml === clCurM ? clCur : d.ml === clPrevM ? clPrev : null;
+            if (!b) return;
+            b.tI += d.incoming||0;
+            b.tR += d.resolved||0;
+        });
+        slaD.forEach(function(d) {
+            var b = d.ml === clCurM ? clCur : d.ml === clPrevM ? clPrev : null;
+            if (!b) return;
+            var v=0,c=0;
+            if (d.sr!=null){v+=d.sr;c++;}
+            if (d.si!=null){v+=d.si;c++;}
+            if (c>0){b.slaS+=v/c;b.slaC++;}
+        });
+        massD.forEach(function(d) {
+            var b = d.ml === clCurM ? clCur : d.ml === clPrevM ? clPrev : null;
+            if (b) b.mi += d.mi||0;
+        });
+        var clCurPP = clCur.tzt>0 ? clCur.proj/clCur.tzt*100 : 0;
+        var clPrevPP = clPrev.tzt>0 ? clPrev.proj/clPrev.tzt*100 : 0;
+        var clCurSla = clCur.slaC>0 ? clCur.slaS/clCur.slaC : 0;
+        var clPrevSla = clPrev.slaC>0 ? clPrev.slaS/clPrev.slaC : 0;
+        clTrendTzt = trendHtml(clCur.tzt, clPrev.tzt);
+        clTrendPP = trendHtml(clCurPP, clPrevPP);
+        clTrendTk = trendHtml(clCur.tI, clPrev.tI);
+        clTrendSla = trendHtml(clCurSla, clPrevSla);
+        clTrendMi = trendHtml(clCur.mi, clPrev.mi);
+    }
+
     document.getElementById('clientKpiRow').innerHTML =
-        '<div class="kpi-card" style="--kpi-accent:#6366f1"><div class="kpi-label">ТЗТ всего</div><div class="kpi-value">'+tT.toFixed(1)+'</div><div class="kpi-subtext"><span>опер: '+tO.toFixed(1)+' / проект: '+tP.toFixed(1)+'</span></div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#8b5cf6"><div class="kpi-label">Доля проектов</div><div class="kpi-value">'+pP+'%</div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#f59e0b"><div class="kpi-label">Заявки</div><div class="kpi-value">'+tI+' / '+tR+'</div><div class="kpi-subtext"><span>поступило / решено</span></div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#22c55e"><div class="kpi-label">Выполнено в срок</div><div class="kpi-value">'+avgSla+'%</div></div>'+
-        '<div class="kpi-card" style="--kpi-accent:#ef4444"><div class="kpi-label">Массовые инциденты</div><div class="kpi-value">'+mi+'</div></div>';
+        '<div class="kpi-card" style="--kpi-accent:#6366f1"><div class="kpi-label">ТЗТ всего</div><div class="kpi-value" data-target="'+tT.toFixed(1)+'" data-suffix="">'+tT.toFixed(1)+'</div><div class="kpi-subtext"><span>опер: '+tO.toFixed(1)+' / проект: '+tP.toFixed(1)+'</span></div><div class="kpi-trend">'+clTrendTzt+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#8b5cf6"><div class="kpi-label">Доля проектов</div><div class="kpi-value" data-target="'+pP+'" data-suffix="%">'+pP+'%</div><div class="kpi-trend">'+clTrendPP+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#f59e0b"><div class="kpi-label">Заявки</div><div class="kpi-value">'+tI+' / '+tR+'</div><div class="kpi-subtext"><span>поступило / решено</span></div><div class="kpi-trend">'+clTrendTk+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#22c55e"><div class="kpi-label">Выполнено в срок</div><div class="kpi-value" data-target="'+avgSla+'" data-suffix="%">'+avgSla+'%</div><div class="kpi-trend">'+clTrendSla+'</div></div>'+
+        '<div class="kpi-card" style="--kpi-accent:#ef4444"><div class="kpi-label">Массовые инциденты</div><div class="kpi-value" data-target="'+mi+'" data-suffix="">'+mi+'</div><div class="kpi-trend">'+clTrendMi+'</div></div>';
+
+    // Animate client KPI counters
+    document.querySelectorAll('#clientKpiRow .kpi-value[data-target]').forEach(function(el) {
+        var t = el.getAttribute('data-target');
+        var s = el.getAttribute('data-suffix') || '';
+        animateCountUp(el, t, s);
+    });
 
     renderClTzt(tztD);
     renderClOp(tztD);
@@ -897,7 +1087,8 @@ function renderClTzt(data) {
                     updateFilterSummary();
                     renderClientTab();
                 }
-            }
+            },
+            onHover: (e, el) => { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
         }
     });
 }
@@ -916,11 +1107,12 @@ function renderClOp(data) {
         if (d.tzt_type === 'проект') a[d.client].p += d.tzt||0;
     });
     const s = Object.entries(a).sort((a,b) => (b[1].o + b[1].p) - (a[1].o + a[1].p)).slice(0, 15);
+    var clOpLabels = s.map(x => x[0]);
     if (charts.cO) charts.cO.destroy();
     charts.cO = new Chart(document.getElementById('clientOpProjChart').getContext('2d'), {
         type: 'bar',
         data: {
-            labels: s.map(x => x[0]),
+            labels: clOpLabels,
             datasets: [
                 {label: 'Операционка', data: s.map(x => x[1].o), backgroundColor: '#6366f1', borderWidth: 0, borderRadius: 3},
                 {label: 'Проекты', data: s.map(x => x[1].p), backgroundColor: '#8b5cf6', borderWidth: 0, borderRadius: 3}
@@ -937,7 +1129,21 @@ function renderClOp(data) {
             scales: {
                 x: {stacked: true, grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                 y: {stacked: true, grid: {display: false}, ticks: {color: '#8b8fa3', font: {size: 11}}}
-            }
+            },
+            onClick: function(e, el) {
+                if (el.length) {
+                    var cl = clOpLabels[el[0].index];
+                    if (state.clients.size === 1 && state.clients.has(cl)) {
+                        state.clients = new Set(D.clients||[]);
+                    } else {
+                        state.clients = new Set([cl]);
+                    }
+                    syncClientCbs();
+                    updateFilterSummary();
+                    renderClientTab();
+                }
+            },
+            onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
         }
     });
 }
@@ -1034,7 +1240,8 @@ function renderClTk(data) {
             scales: {
                 x: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}},
                 y: {grid: {color: '#2a2d3a'}, ticks: {color: '#8b8fa3'}}
-            }
+            },
+            onHover: function(e, el) { e.native.target.style.cursor = el.length ? 'pointer' : 'default'; }
         }
     });
 }
@@ -1173,6 +1380,13 @@ function renderClTable(tztD, tkD, slaD, massD) {
             if (isEmpty) return; // skip zero months
             const tr = document.createElement('tr');
             tr.className = 'ops-data-row';
+            tr.title = [
+                r.client + ' \u2014 ' + r.month,
+                '\u0422\u0417\u0422: ' + r.tzt.toFixed(1) + ' (\u043e\u043f\u0435\u0440: ' + r.ops.toFixed(1) + ' / \u043f\u0440\u043e\u0435\u043a\u0442: ' + r.proj.toFixed(1) + ')',
+                '\u0417\u0430\u044f\u0432\u043a\u0438: ' + r.tk_in + ' \u043f\u043e\u0441\u0442\u0443\u043f\u0438\u043b\u043e / ' + r.tk_res + ' \u0440\u0435\u0448\u0435\u043d\u043e',
+                'SLA: ' + (r.sla!=null ? r.sla.toFixed(1)+'%' : '\u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445'),
+                '\u041c\u0430\u0441\u0441\u043e\u0432\u044b\u0435 \u0438\u043d\u0446\u0438\u0434\u0435\u043d\u0442\u044b: ' + r.mi
+            ].join('\n');
             tr.innerHTML =
                 '<td>'+r.client+'</td>'+
                 '<td>'+r.month+'</td>'+
