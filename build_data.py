@@ -757,34 +757,40 @@ def copy_to_leaders():
         print(f"Leaders: copy failed — {e}")
 
 
-def deploy_netlify():
-    """Deploy dashboard to Netlify (if CLI available)."""
-    site_dir = os.path.join(SCRIPT_DIR, '_site')
-    os.makedirs(site_dir, exist_ok=True)
-    shutil.copy2(HTML_OUTPUT, os.path.join(site_dir, 'index.html'))
+def deploy_github():
+    """Deploy dashboard to GitHub Pages via git push."""
+    index_path = os.path.join(SCRIPT_DIR, 'index.html')
+    shutil.copy2(HTML_OUTPUT, index_path)
     try:
         result = subprocess.run(
-            ['npx', 'netlify-cli', 'deploy', '--prod', '--dir=_site', '--no-build'],
+            ['git', 'diff', '--quiet', 'index.html'],
+            cwd=SCRIPT_DIR, capture_output=True
+        )
+        if result.returncode == 0:
+            print("GitHub Pages: no changes to deploy")
+            return
+        subprocess.run(
+            ['git', 'add', 'index.html', 'dashboard_v7.html', 'v3_data.json'],
+            cwd=SCRIPT_DIR, check=True, capture_output=True
+        )
+        subprocess.run(
+            ['git', 'commit', '-m', f'Auto-update dashboard {datetime.now().strftime("%Y-%m-%d %H:%M")}'],
+            cwd=SCRIPT_DIR, check=True, capture_output=True
+        )
+        result = subprocess.run(
+            ['git', 'push'],
             cwd=SCRIPT_DIR, capture_output=True, text=True, timeout=60
         )
         if result.returncode == 0:
-            # Extract URL from output
-            for line in result.stdout.split('\n'):
-                if 'netlify.app' in line and 'Production' not in line and 'deploy URL' not in line:
-                    continue
-                if 'netlify.app' in line:
-                    print(f"Netlify: {line.strip()}")
-                    break
-            else:
-                print("Netlify: deployed successfully")
+            print("GitHub Pages: pushed → https://jenyar623-ui.github.io/ascorp-leaders/")
         else:
-            print(f"Netlify: deploy failed — {result.stderr[:200]}")
-    except FileNotFoundError:
-        print("Netlify: CLI not found, skipping deploy")
+            print(f"GitHub Pages: push failed — {result.stderr[:200]}")
+    except subprocess.CalledProcessError as e:
+        print(f"GitHub Pages: git error — {e}")
     except subprocess.TimeoutExpired:
-        print("Netlify: deploy timed out")
+        print("GitHub Pages: push timed out")
     except Exception as e:
-        print(f"Netlify: deploy error — {e}")
+        print(f"GitHub Pages: deploy error — {e}")
 
 
 def build():
@@ -793,7 +799,7 @@ def build():
     write_json(data)
     build_html()
     copy_to_leaders()
-    deploy_netlify()
+    deploy_github()
     elapsed = time.time() - start
     print(f"\nBuild complete in {elapsed:.1f}s")
 
